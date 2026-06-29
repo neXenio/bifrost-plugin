@@ -56,7 +56,8 @@ Run these checks to confirm everything is live:
 1. **MCP loaded:** type `/mcp` — `bifrost` should appear in the server list.
 2. **Skill search works:** if your gateway exposes a skill server, call
    `mcp__bifrost__<skills-server>-skill_search` with `"test connection"` — should return results.
-3. **Memory service:** `curl -s ${BIFROST_MEMORY_URL:-http://127.0.0.1:52421}/health` — should respond (if you run a memory service locally).
+3. **Memory tools:** if your gateway exposes a memory server, call its search tool
+   (`mcp__bifrost__<memory-server>-search`) with a short query — should return results or an empty list.
 4. **Session context:** open a new session — the bifrost context block should appear at the top.
 
 ## Step 5 — Add the skill-discovery MUST-stanza (recommended)

@@ -26,5 +26,6 @@ example:
 - Analytics / database queries → your analytics server
 - Up-to-date library/API docs → your docs server (NOT training memory)
 - Web search → your web-search server
-- Past decisions, people, project facts → your memory server (also auto-injected
-  per prompt by this plugin; query it for more)
+- Past decisions, people, project facts → your memory server (query directly
+  via the gateway's memory MCP tool before non-trivial tasks; save decisions
+  after completing significant work)

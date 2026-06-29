@@ -37,13 +37,16 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 Expected: 200 or 405 (OPTIONS probe). 401 → bad VK. Timeout / connection refused → gateway down or `BIFROST_URL` wrong (contact the gateway operator).
 
-## 4. Check the memory service (for memory injection)
+## 4. Check the gateway's memory MCP tools (for agent-driven memory)
 
-```bash
-curl -s "${BIFROST_MEMORY_URL:-http://127.0.0.1:52421}/health"
+Run `/mcp` and look for a memory server under `bifrost`. If present, test it:
+
+```
+mcp__bifrost__<memory-server>-search("test connection")
 ```
 
-If the service is not running, memory injection silently skips (the hook degrades gracefully). Start the memory service to restore auto-injection.
+If the tool is not found, the gateway exposes no memory server — memory calls will
+simply not be available. This does not affect skill discovery or gateway connectivity.
 
 ## 5. Check the plugin is installed and enabled
 
@@ -86,9 +89,7 @@ mcp__bifrost__<skills-server>-skill_search("test connection")
 | 401 on every bifrost call | `BIFROST_VK` wrong or missing | Set env var, restart CC |
 | 403 | Key valid but no permission | Contact gateway operator |
 | `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `~/.claude/mcp.json`; restart CC |
-| No `<bifrost-memory>` block | Memory service down or plugin not loaded | Start service; check plugin (step 5) |
-| Hook fires but memory empty | Service up but no matching memories | Normal for new installs; add some context first |
-| Session reflection not staging | Permissions on `~/.cache/bifrost-plugin/` | `mkdir -p ~/.cache/bifrost-plugin/{staging,reflected}` |
+| Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
 
 For manual MCP wiring: `/bifrost-mcp-setup`.

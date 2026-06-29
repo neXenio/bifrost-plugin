@@ -1,14 +1,13 @@
 # bifrost-plugin
 
 Claude Code plugin for any [Bifrost](https://github.com/maximhq/bifrost) MCP
-gateway: one-command setup, per-prompt context injection, skill discovery, and
-session memory.
+gateway: one-command setup, skill discovery, and agent-driven memory via MCP.
 
 **Scope: Claude Code only.** Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
 
-The memory and skill-discovery features need a gateway that exposes a memory
-service and a skill server. Without them, the plugin still wires up the gateway
-and degrades gracefully — those features simply no-op.
+The skill-discovery and memory features need a gateway that exposes a skill server
+and/or a memory server. Without them, the plugin still wires up the gateway and
+degrades gracefully — those features simply no-op.
 
 ---
 
@@ -16,10 +15,9 @@ and degrades gracefully — those features simply no-op.
 
 | Pillar | Behavior |
 |--------|----------|
-| 1 — Memory injection | Every prompt is silently enriched with relevant context from the memory service (similarity >= 0.5, capped at 600 chars) |
-| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
-| 3 — One-command onboarding | `node bin/install.js --key vk_…` (or `/bifrost-setup`) wires the MCP entry in seconds |
-| 4 — Session reflection | On session end, learnings are staged to `~/.cache/bifrost-plugin/staging/`; the next session start POSTs them to the memory service (`/memory/store`) and drains them to `processed/` |
+| 1 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
+| 2 — One-command onboarding | `node bin/install.js --key vk_…` (or `/bifrost-setup`) wires the MCP entry in seconds |
+| 3 — Agent-driven memory | The agent recalls relevant context via the gateway's memory MCP tools before non-trivial tasks, and saves decisions after significant work — no automatic injection |
 
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
 
@@ -27,13 +25,12 @@ See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engine
 
 ## Configuration
 
-The plugin is driven by four env vars:
+The plugin is driven by three env vars:
 
 | Var | Purpose | Default |
 |-----|---------|---------|
 | `BIFROST_URL` | Gateway `/mcp` endpoint | `https://your-bifrost-gateway.example/mcp` (placeholder) |
 | `BIFROST_VK` | Virtual key for the `x-bf-vk` auth header | (unset — required) |
-| `BIFROST_MEMORY_URL` | Memory service base URL | `http://127.0.0.1:52421` |
 | `BIFROST_SKILLS_SERVER` | Name of the gateway's skill server | `skills` |
 
 ---
@@ -85,7 +82,6 @@ Or type **"set up bifrost"** — the `bifrost-onboard` skill takes over.
 - Claude Code with MCP support
 - `BIFROST_URL` set to your gateway's `/mcp` endpoint
 - `BIFROST_VK` set to your virtual key (from your gateway operator)
-- A memory service reachable at `${BIFROST_MEMORY_URL}` (default `http://127.0.0.1:52421`) for memory features (Pillars 1 + 4). Without it, memory injection and reflection silently no-op — the gateway and skill discovery still work.
 
 ---
 
@@ -94,7 +90,7 @@ Or type **"set up bifrost"** — the `bifrost-onboard` skill takes over.
 | Skill | Trigger |
 |-------|---------|
 | `bifrost-onboard` | "set up bifrost", "onboard me to bifrost", "install bifrost gateway" |
-| `bifrost-debug` | "bifrost not working", "mcp not connecting", "memory not injecting" |
+| `bifrost-debug` | "bifrost not working", "mcp not connecting", "skills not found" |
 | `bifrost-mcp-setup` | "manually add bifrost mcp", "edit mcp.json for bifrost", "installer failed" |
 
 ---
@@ -124,8 +120,6 @@ environment. The key is never stored in any file.
 
 **401 / 403 from bifrost** — `BIFROST_VK` is missing or wrong. Re-export it.
 
-**No memory injection** — the memory service is not running on `${BIFROST_MEMORY_URL}` (default `127.0.0.1:52421`). Both hooks silent-fail so prompts continue normally; only enrichment is skipped.
-
 **Skill-search tool not found** — bifrost MCP not loaded, or your gateway exposes no skill server. Check `~/.claude/mcp.json` has the bifrost entry and restart Claude Code.
 
 **Hooks not firing** — the hooks ship inside the plugin (`hooks/hooks.json`), not `~/.claude/settings.json`. Confirm the plugin is installed and enabled via `/plugin`, then restart Claude Code.
@@ -146,15 +140,16 @@ Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` dia
 ## Architecture
 
 ```
-SessionStart  →  session-start.cjs  →  prints guidance/bifrost-context.md (~400 tokens),
-                                        then drains staging/ → POST /memory/store → processed/
-UserPromptSubmit  →  prompt-submit.cjs  →  (A) memory enrich + (B) skill-discovery hint
-Stop  →  session-reflect.cjs  →  stages session learnings to staging/ (Pillar 4 flywheel)
+SessionStart      →  session-start.cjs  →  prints guidance/bifrost-context.md (~400 tokens)
+UserPromptSubmit  →  prompt-submit.cjs  →  skill-discovery hint for task-verb prompts
 
 ~/.claude/mcp.json  →  bifrost MCP server  →  mcp__bifrost__<server>-<tool> (skills, memory, …)
+
+Memory: agent calls mcp__bifrost__<memory-server>-search before tasks,
+        mcp__bifrost__<memory-server>-store after significant work.
 ```
 
-All hooks silent-fail: any network error, service-down, or parse failure exits 0 silently so they never block a prompt.
+All hooks silent-fail: any error exits 0 silently so they never block a prompt.
 
 ---
 
@@ -176,10 +171,7 @@ try {
 } catch (e) { console.error('skip:', e.message); }
 "
 
-# 3. Clean the local cache (staging / processed / reflected):
-rm -rf ~/.cache/bifrost-plugin/
-
-# 4. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
+# 3. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
 ```
 
 ---

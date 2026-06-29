@@ -28,8 +28,29 @@ example:
 - Analytics / database queries → your analytics server
 - Up-to-date library/API docs → your docs server (NOT training memory)
 - Web search → your web-search server
-- Past decisions, people, project facts → your memory server (auto-injected per
-  prompt; query for more)
+- Past decisions, people, project facts → your memory server (query directly
+  via the gateway's memory MCP tool — see Memory section below)
+
+---
+
+## Memory — agent-driven via the gateway MCP
+
+Memory is accessed through the gateway's memory MCP server. There is no
+automatic HTTP injection — memory recall and save are your responsibility as
+the agent.
+
+**Before non-trivial tasks:** call the gateway's memory search tool (typically
+`mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
+past decisions, project facts, or context (e.g. `k=5`).
+
+**After completing significant work:** save durable facts or decisions with the
+gateway's memory store tool (typically `mcp__bifrost__<memory-server>-store` or
+the equivalent write tool your gateway exposes). Include: decisions made, root
+causes found, conventions learned, gotchas discovered. Exclude: transient
+details, secrets, per-file noise.
+
+Run `/mcp` to confirm which memory tools your gateway exposes and their exact
+tool names.
 
 ---
 
@@ -46,7 +67,6 @@ Owns: `hooks/`, `skills/`, `guidance/`, `AGENTS.md`
 **Cross-cutting rules:**
 - Manifests reference hooks only by path in `plugin.json` — never edit hook bodies for naming.
 - Hooks reference the MCP server only by name (`bifrost`, skill tool prefix `<skills-server>-`) — never edit `.mcp.json`.
-- The sentinel marker `<bifrost-memory>` is owned by the prompt-submit hook.
 
 ---
 
@@ -56,11 +76,3 @@ Every hook in `hooks/` MUST:
 - Wrap the entire body in `try/catch` with `catch: process.exit(0)`
 - Never write stack traces or error messages to stderr in a way that surfaces to the user
 - Exit 0 on every code path — a non-zero exit blocks the CC session
-
-## Session reflection staging
-
-`hooks/session-reflect.cjs` uses the STAGE-THEN-PROCESS pattern:
-- Stop hook writes a JSON payload to `~/.cache/bifrost-plugin/staging/`
-- Next SessionStart (or a background processor) ingests staged files into the memory service
-- One reflection per `session_id` (marker file in `~/.cache/bifrost-plugin/reflected/`)
-- No network calls on the exit path — file I/O only

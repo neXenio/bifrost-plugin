@@ -34,8 +34,8 @@ This single command:
 ## Verification checklist
 
 - The gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) is reachable (MCP loaded)
-- Memory injection fires on non-trivial prompts (memory service running on `${BIFROST_MEMORY_URL}`, default `127.0.0.1:52421`)
 - SessionStart injects bifrost context at the top of each session
+- Memory tools (if your gateway exposes a memory server) are callable via `mcp__bifrost__<memory-server>-search`
 
 ## Troubleshoot
 

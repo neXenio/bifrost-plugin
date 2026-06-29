@@ -73,8 +73,9 @@ Type **"manually add bifrost mcp"** in Claude Code for the `bifrost-mcp-setup` g
 After install and restart:
 
 1. Open a new Claude Code session — you should see bifrost context injected at session start.
-2. Type: `"implement a new feature"` — expect a memory block (if a memory service is running) and a skill-discovery hint.
+2. Type: `"implement a new feature"` — expect a skill-discovery hint pointing at the gateway's skill-search tool.
 3. If your gateway exposes a skill server, call `mcp__bifrost__<skills-server>-skill_search` with any task description — it should return matches.
+4. If your gateway exposes a memory server, call the memory search tool before a task and the memory store tool after — run `/mcp` to see which tools are available.
 
 ## Idempotency
 
@@ -106,10 +107,7 @@ try {
 } catch (e) { console.error('skip:', e.message); }
 "
 
-# 3. Clean the local cache:
-rm -rf ~/.cache/bifrost-plugin/
-
-# 4. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
+# 3. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
 ```
 
 ## Troubleshoot
