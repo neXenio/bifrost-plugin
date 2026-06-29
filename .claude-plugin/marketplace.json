@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "bifrost-marketplace",
+  "version": "0.1.0",
+  "plugins": [
+    {
+      "name": "bifrost-plugin",
+      "source": "./",
+      "description": "Bifrost MCP gateway plugin for Claude Code (memory + skills + onboarding)."
+    }
+  ]
+}

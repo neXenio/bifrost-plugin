@@ -1,0 +1,76 @@
+---
+name: bifrost-onboard
+description: "Onboard to a Bifrost MCP gateway in Claude Code — run the one-command setup, verify the MCP connects, and confirm memory + skill discovery are live. Triggers on 'set up bifrost', 'onboard me to bifrost', 'install bifrost gateway', 'first-run setup', 'bifrost setup'."
+---
+
+# Bifrost Onboarding
+
+Walk through full Bifrost setup in Claude Code. Focus exclusively on CC paths.
+
+## Step 1 — Get your gateway URL and virtual key
+
+Ask your gateway operator for two values:
+- The gateway `/mcp` endpoint URL → `BIFROST_URL`
+- Your personal virtual key (`vk_…`) → `BIFROST_VK`
+
+## Step 2 — Run the installer
+
+From the plugin root (or use the slash command — see below):
+
+```bash
+export BIFROST_URL=https://<your-gateway-host>/mcp
+node "${CLAUDE_PLUGIN_ROOT}/bin/install.js" --key vk_<your-key>
+```
+
+The installer:
+- Merges the bifrost MCP server into `~/.claude/mcp.json` (idempotent — safe to run twice; it backs up the existing file to `mcp.json.bak` and writes atomically).
+- Prints an `export BIFROST_VK=…` line. It does NOT modify your shell profile — you must paste that line into `~/.zshrc` (or `~/.bashrc`) yourself for the key to persist across sessions.
+
+Or run the slash command from inside Claude Code (same installer):
+
+```
+/bifrost-setup
+```
+
+## Step 3 — Persist the env vars, then restart Claude Code
+
+Add the export lines to your shell profile so they survive new shells:
+
+```bash
+echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
+echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Then restart CC so the MCP server and hooks are loaded.
+
+> macOS note: Claude Code launched from the Dock or Spotlight does NOT inherit
+> `~/.zshrc` exports. Launch CC from a terminal (`open` from a shell, or run the
+> `claude` CLI), or set the env vars via a launchd plist, otherwise the gateway
+> sees no key.
+
+## Step 4 — Smoke check
+
+Run these checks to confirm everything is live:
+
+1. **MCP loaded:** type `/mcp` — `bifrost` should appear in the server list.
+2. **Skill search works:** if your gateway exposes a skill server, call
+   `mcp__bifrost__<skills-server>-skill_search` with `"test connection"` — should return results.
+3. **Memory service:** `curl -s ${BIFROST_MEMORY_URL:-http://127.0.0.1:52421}/health` — should respond (if you run a memory service locally).
+4. **Session context:** open a new session — the bifrost context block should appear at the top.
+
+## Step 5 — Add the skill-discovery MUST-stanza (recommended)
+
+Offer to append the stanza from `guidance/AGENTS-skill-stanza.md` to the user's
+`~/.claude/CLAUDE.md`. Check first — skip if `## Skill Discovery` heading is
+already present (idempotent).
+
+```bash
+grep -q "## Skill Discovery" ~/.claude/CLAUDE.md \
+  || cat "${CLAUDE_PLUGIN_ROOT}/guidance/AGENTS-skill-stanza.md" >> ~/.claude/CLAUDE.md
+```
+
+## Troubleshooting
+
+If anything fails, run `/bifrost-debug` for guided diagnosis.
+For manual MCP wiring, run `/bifrost-mcp-setup`.

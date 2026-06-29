@@ -1,0 +1,30 @@
+# Secrets — never commit keys or env files
+.env
+.env.*
+*.key
+*.pem
+*_VK=*
+*vk_*.txt
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# Local state & staging
+# Note: the plugin's runtime cache lives at ~/.cache/bifrost-plugin/ (outside the
+# repo), so no ignore rule is needed — git does not expand ~ in .gitignore anyway.
+.bifrost-plugin-cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+.omc/
+.DS_Store
