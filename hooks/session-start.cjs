@@ -2,22 +2,23 @@
 // SessionStart hook. Two jobs, both best-effort, always exits 0:
 //   1. Emit guidance/bifrost-context.md so the agent knows how to reach the
 //      gateway (skills, memory, code-mode).
-//   2. HYBRID memory: if a gateway + key are configured, recall a few salient
-//      memories for this project and inject them as a compact header, so the
-//      agent starts with context instead of having to remember to pull it.
-//      Agent-driven memory_search/memory_store (PULL) still applies for the
-//      rest of the session — this just primes the first turn.
+//   2. HYBRID memory: inject a CACHED recall for this project instantly, and
+//      kick off a detached background refresh for next time. Reading the cache
+//      is sub-millisecond, so session start never waits on the memory backend
+//      (which can be slow under concurrent load). Agent-driven
+//      memory_search/memory_store (PULL) still applies for the rest of session.
 //
-// Disable the memory header with BIFROST_MEMORY_INJECT=0. Never blocks or
-// delays session start beyond a short timeout; any failure is silent.
+// Disable the memory header with BIFROST_MEMORY_INJECT=0. Never blocks session
+// start (cache read + detached spawn only); any failure is silent.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const gw = require('./lib/gateway.cjs');
 
 const MEM_TIMEOUT_MS = 3500;
-const MAX_FACTS = 6;
-const SNIPPET_LEN = 180;
+const MEM_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function emitContext() {
   try {
@@ -35,48 +36,56 @@ function projectQuery() {
   return name ? `${name} ${base}` : base;
 }
 
-// The gateway echoes memory hits as JSON; pull out the "content" strings without
-// depending on the exact envelope (flat return vs code-mode [TOOL] log line).
-function extractFacts(text) {
-  if (!text) return [];
-  const facts = [];
-  const re = /"content"\s*:\s*("(?:[^"\\]|\\.)*")/g;
-  let m;
-  while ((m = re.exec(text)) && facts.length < MAX_FACTS) {
-    let s;
-    try { s = JSON.parse(m[1]); } catch (_) { continue; }
-    s = s.replace(/\s+/g, ' ').trim();
-    if (s) facts.push(s.length > SNIPPET_LEN ? s.slice(0, SNIPPET_LEN) + '…' : s);
-  }
-  return facts;
+function memCacheFile() {
+  const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  const key = (dir ? path.basename(dir) : 'default').replace(/[^A-Za-z0-9_-]/g, '_');
+  return path.join(os.homedir(), '.cache', 'bifrost-plugin', `memory-recall-${key}.json`);
 }
 
-async function emitMemory() {
+// Inject a CACHED memory recall instantly, then kick off a detached background
+// refresh for next time. Reading the cache is sub-millisecond, so session start
+// never waits on the memory backend (which can be slow under concurrent load).
+// First ever session for a project has no cache → no header, but the refresh
+// populates it for the next one.
+function emitMemory() {
   if (process.env.BIFROST_MEMORY_INJECT === '0') return;
   const { url, vk } = gw.env();
   if (!url || !vk) return; // not configured — nothing to recall
 
-  const caps = await gw.getCapabilities(MEM_TIMEOUT_MS);
-  if (!caps || !caps.memory) return; // gateway exposes no memory server
+  const file = memCacheFile();
 
-  const text = await gw.callCapability(
-    caps.memory,
-    'memory_search',
-    { query: projectQuery(), k: MAX_FACTS },
-    MEM_TIMEOUT_MS
-  );
-  const facts = extractFacts(text);
-  if (!facts.length) return;
+  // 1) Inject the cached recall immediately, if fresh.
+  try {
+    const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const facts = Array.isArray(c.facts) ? c.facts : [];
+    const age = typeof c.at === 'number' ? Date.now() - c.at : Infinity;
+    if (facts.length && age < MEM_CACHE_TTL_MS) {
+      const lines = ['', '## Bifrost memory — recalled for this project', ''];
+      for (const f of facts) lines.push(`- ${f}`);
+      lines.push('');
+      lines.push(
+        '_Cached recall (refreshing in the background). Search the memory server ' +
+          'for specifics; store durable facts after significant work._'
+      );
+      lines.push('');
+      process.stdout.write(lines.join('\n'));
+    }
+  } catch (_) {
+    // no cache yet — fine, the refresh below will create it
+  }
 
-  const lines = ['', '## Bifrost memory — recalled for this project', ''];
-  for (const f of facts) lines.push(`- ${f}`);
-  lines.push('');
-  lines.push(
-    `_Pulled via ${caps.memory.server}.memory_search (${caps.memory.mode}). ` +
-      'Search again for specifics; store durable facts after significant work._'
-  );
-  lines.push('');
-  process.stdout.write(lines.join('\n'));
+  // 2) Fire-and-forget background refresh. Detached + unref so it outlives this
+  //    hook and never delays session start, however slow the backend is.
+  try {
+    const child = spawn(
+      process.execPath,
+      [path.join(__dirname, 'memory-refresh.cjs'), file, projectQuery()],
+      { detached: true, stdio: 'ignore', env: process.env }
+    );
+    child.unref();
+  } catch (_) {
+    // spawn failed — silent; cache simply won't refresh this session
+  }
 }
 
 // Skills primer: tell the agent the skill library exists, how to retrieve from
@@ -127,7 +136,7 @@ async function emitSkills() {
 async function main() {
   emitContext();
   try { await emitSkills(); } catch (_) { /* silent */ }
-  try { await emitMemory(); } catch (_) { /* silent */ }
+  try { emitMemory(); } catch (_) { /* silent */ }
   process.exit(0);
 }
 
