@@ -1,57 +1,69 @@
 # Bifrost gateway — session context
 
 You are connected to a **Bifrost MCP gateway**: a unified MCP proxy that routes to
-the tools and skill library your gateway is configured to expose.
-
-## Gateway
+the tools, skill library, and memory your gateway exposes.
 
 | Item | Value |
 |------|-------|
-| MCP server | `bifrost` (loaded from plugin or `~/.claude/mcp.json`) |
-| Gateway URL | from `${BIFROST_URL}` env var (defaults to a placeholder until set) |
-| Auth | `x-bf-vk` header — value from `${BIFROST_VK}` env var |
+| MCP server | `bifrost` (from the plugin's `.mcp.json` or `~/.claude/mcp.json`) |
+| Gateway URL | `${BIFROST_URL}` |
+| Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
-## MCP tools available via bifrost
+## Two ways tools are exposed — this matters
 
-Tools are namespaced `mcp__bifrost__<server>-<tool>`, where `<server>` is each
-upstream server your gateway exposes. Common patterns:
+Run `/mcp` to see what loaded. A gateway exposes upstream servers in one of two
+modes, and **the same gateway usually mixes both**:
 
-| Tool | Purpose |
-|------|---------|
-| `mcp__bifrost__<skills-server>-skill_search` | Full-text search over the shared skill library (skill server is `skills` by default) |
-| `mcp__bifrost__<skills-server>-skill_navigate` | Decision-tree browse when search doesn't find the right skill |
-| `mcp__bifrost__<skills-server>-get_skill` | Load full instructions for a chosen skill |
-| `mcp__bifrost__<memory-server>-search` | Query past decisions, people, project context |
-| `mcp__bifrost__<memory-server>-store` | Save durable facts or decisions for future sessions |
-| `mcp__bifrost__<server>-*` | Any other server your gateway routes to (docs, search, issue tracker, analytics, …) |
+1. **Flat tools** — callable directly, namespaced `mcp__bifrost__<server>-<tool>`
+   (e.g. `mcp__bifrost__lucaskills-skill_search`).
+2. **Code-mode** — most servers are *not* flat tools. They are reached through the
+   meta-tool **`executeToolCode`**, which runs a short Starlark/Python snippet:
 
-Run `/mcp` in Claude Code to see exactly which servers and tools your gateway exposes.
+   ```
+   result = <server>.<tool>(param="value")
+   ```
 
-## Skill Discovery — MUST do before non-trivial work
+   Discover what code-mode offers with `listToolFiles` (lists `servers/<server>/<tool>.pyi`),
+   `readToolFile` (confirm a tool's parameters), and `getToolDocs` (full docs).
+   Starlark note: top-level `for`/`if` must live inside a `def`; assign the value
+   you want returned to `result`.
 
-**Before implementing, debugging, deploying, writing tests, reviewing a PR, or
-setting up infra** — call the gateway's skill-search tool (typically
-`mcp__bifrost__<skills-server>-skill_search`) with a short task description. A
-matching skill may handle the task entirely or provide a specialized workflow.
+If a `mcp__bifrost__<server>-<tool>` tool does not exist, the capability is almost
+certainly code-mode — do **not** give up; use `executeToolCode`.
 
-Skip only for: single-line edits, file reads/grep, clarifying questions.
+## Skill discovery — do this before non-trivial work
 
-## Gateway routing (don't guess — use the gateway)
+**Before implementing, debugging, deploying, writing tests, reviewing, or setting
+up infra**, search the skill library. A match may handle the task outright or give
+a specialized procedure. The SessionStart injection shows the exact invocation and
+a live sample of the navigator domains for *your* gateway. Typical names:
 
-Route capability requests through whichever MCP servers your gateway exposes:
-issue tracker, error tracking, analytics, library/API docs, web search, memory.
+- `skill_search(query="<task>", k=5)` — search by intent.
+- `skill_navigate(node="<id>")` — browse the decision tree (omit `node` for root).
+- `get_skill(name="<skill>")` — load full instructions before following them.
 
-## Memory — agent-driven via MCP (PULL)
+Skip only for single-line edits, file reads/grep, and clarifying questions.
 
-Memory is **not** auto-injected. You are responsible for using it.
+## Memory — recall before, store after (agent-driven)
 
-- **Before non-trivial tasks:** call the gateway's memory search tool (typically
-  `mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
-  past decisions, project facts, or context.
-- **After completing significant work:** call the gateway's memory store tool
-  (typically `mcp__bifrost__<memory-server>-store`) to save durable facts —
-  decisions made, root causes found, conventions learned, gotchas discovered.
-  Exclude: transient details, secrets, per-file noise.
+Memory is **not** silently auto-injected (the SessionStart hook primes a few
+salient facts, nothing more). You are responsible for using it during the session:
+
+- **Before non-trivial tasks:** `memory_search(query="<short query>", k=6)` to
+  recall past decisions, root causes, conventions, people, and project context.
+- **After significant work:** `memory_store(text="<durable fact>", tags="...",
+  room="...", salience=0.8)` — decisions made, root causes found, conventions and
+  gotchas learned. Exclude transient detail, secrets, and per-file noise.
+
+On a code-mode gateway both run through `executeToolCode`, e.g.
+`result = <memory-server>.memory_search(query="...", k=6)`. Confirm the server name
+and exact signature with `listToolFiles` / `readToolFile` if unsure.
+
+## Other capabilities
+
+Route capability requests through whatever the gateway exposes — issue tracker,
+error tracking, analytics, docs, web search — via flat tools or code-mode. When in
+doubt, `listToolFiles` first; don't guess tool names.
 
 ## Onboarding / troubleshooting
 
