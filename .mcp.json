@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "bifrost": {
+      "type": "http",
+      "url": "${BIFROST_URL}",
+      "headers": { "x-bf-vk": "${BIFROST_VK}" }
+    }
+  }
+}

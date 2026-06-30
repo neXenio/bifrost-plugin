@@ -11,6 +11,9 @@ node_modules/
 dist/
 .cache/
 
+# Plugin MCP config — must ship. Override any global gitignore that excludes .mcp.json.
+!.mcp.json
+
 # Local state & staging
 # Note: the plugin's runtime cache lives at ~/.cache/bifrost-plugin/ (outside the
 # repo), so no ignore rule is needed — git does not expand ~ in .gitignore anyway.
