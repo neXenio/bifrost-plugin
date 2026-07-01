@@ -2,6 +2,22 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.0.0] — 2026-07-01
+
+### Distribution-ready
+
+- **Non-blocking session start.** The SessionStart hook does zero synchronous
+  network I/O — it injects the skill-library primer and recalled-memory header
+  from a per-project cache (sub-ms) and refreshes the cache via a detached
+  background worker (`hooks/refresh.cjs`). A slow or unreachable gateway adds
+  ~0ms to startup (measured 0.04s with a dead gateway). Replaces the earlier
+  `memory-refresh.cjs`, which only cached memory.
+- **Self-wiring via shipped `.mcp.json`** (env placeholders) + `defaultEnabled:
+  false`, so the marketplace install is the primary path; `bin/install.js` is a
+  fallback. See `DISTRIBUTION.md` for the fleet rollout guide and the gateway
+  prerequisites that gate a large rollout.
+- README install rewritten to the 3-step marketplace path.
+
 ## [0.2.0] — 2026-06-29
 
 ### Changed — memory is now agent-driven via MCP (pull-only)

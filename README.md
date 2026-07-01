@@ -37,38 +37,44 @@ The plugin is driven by three env vars:
 
 ## Install
 
-Set `BIFROST_URL` to your gateway endpoint and get your `vk_<your-key>` from your
-gateway operator.
+Get your gateway `/mcp` URL and personal virtual key (`vk_…`) from your gateway
+operator, then:
 
-### Recommended — run the installer
+### Recommended — marketplace install (3 steps)
+
+1. In Claude Code:
+   ```
+   /plugin marketplace add neXenio/bifrost-plugin
+   /plugin install bifrost-plugin
+   ```
+2. Put your gateway URL + key in your shell profile:
+   ```bash
+   echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
+   echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+3. Enable and restart Claude Code:
+   ```
+   /plugin enable bifrost-plugin
+   ```
+
+The plugin ships a `.mcp.json`, so the `bifrost` MCP server wires itself from
+`$BIFROST_URL` / `$BIFROST_VK` when you enable it — no installer script needed.
+It ships **disabled** (`defaultEnabled: false`) so it stays dormant until you set
+your key. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
+`/bifrost-debug` if something's off.
+
+### Fallback — manual installer
+
+If you can't use the marketplace (air-gapped, etc.), clone and run the installer,
+which writes the entry into `~/.claude/mcp.json` directly:
 
 ```bash
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>
+node bin/install.js --key vk_<your-key>   # then persist the exports as in step 2
 ```
-
-The installer merges the bifrost MCP entry into `~/.claude/mcp.json` (idempotent;
-backs up to `mcp.json.bak`, writes atomically) and prints an `export BIFROST_VK=…`
-line. It does NOT edit your shell profile — paste the export lines into `~/.zshrc` /
-`~/.bashrc` yourself:
-
-```bash
-echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
-echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
-source ~/.zshrc
-```
-
-Restart Claude Code. Done.
-
-### Inside Claude Code (after the plugin is installed)
-
-```
-/bifrost-setup
-```
-
-Or type **"set up bifrost"** — the `bifrost-onboard` skill takes over.
 
 > macOS note: Claude Code launched from the Dock or Spotlight does NOT inherit
 > `~/.zshrc` exports, so `BIFROST_VK` will be empty and the gateway gets no key.
