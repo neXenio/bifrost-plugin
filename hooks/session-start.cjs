@@ -106,13 +106,17 @@ function spawnRefresh(file) {
 }
 
 function main() {
-  emitContext();
-  const file = cacheFile();
-  const cache = readCache(file);
-  try { emitSkills(cache); } catch (_) {}
-  try { emitMemory(cache); } catch (_) {}
-  spawnRefresh(file);
+  try {
+    emitContext();
+    const file = cacheFile();
+    const cache = readCache(file);
+    try { emitSkills(cache); } catch (_) {}
+    try { emitMemory(cache); } catch (_) {}
+    spawnRefresh(file);
+  } catch (_) { /* silent-fail — never block session start */ }
   process.exit(0);
 }
+
+main();
 
 main();
