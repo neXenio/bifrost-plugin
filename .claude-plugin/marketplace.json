@@ -1,6 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "bifrost-marketplace",
+  "owner": {
+    "name": "neXenio",
+    "url": "https://github.com/neXenio"
+  },
   "version": "1.0.0",
   "plugins": [
     {
