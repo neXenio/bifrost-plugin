@@ -100,7 +100,7 @@ function spawnRefresh(file) {
     spawn(
       process.execPath,
       [path.join(__dirname, 'refresh.cjs'), file, projectQuery()],
-      { detached: true, stdio: 'ignore', env: process.env }
+      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
     ).unref();
   } catch (_) {}
 }
