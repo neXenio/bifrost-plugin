@@ -8,6 +8,9 @@ All notable changes to bifrost-plugin are documented here.
 
 - Remove explicit `hooks` field from `plugin.json` — Claude Code auto-loads
   `hooks/hooks.json`; declaring it caused a duplicate-hooks `/doctor` error.
+- `bin/install.js` writes `${BIFROST_URL}` (runtime template) into
+  `~/.claude/mcp.json`, matching `.mcp.json`, the VK header, and the README —
+  instead of snapshotting the URL at install time.
 
 ## [1.0.0] — 2026-07-01
 

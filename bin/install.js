@@ -6,9 +6,7 @@ const path = require('path');
 const os = require('os');
 
 const BIFROST_SERVER_NAME = 'bifrost';
-// Gateway URL. Point this at your own Bifrost gateway via the BIFROST_URL env var.
-// Defaults to a documented placeholder — replace it before the MCP server can connect.
-const BIFROST_URL = process.env.BIFROST_URL || 'https://your-bifrost-gateway.example/mcp';
+// URL and VK are runtime templates — Claude Code resolves them from the shell env.
 const MCP_JSON_PATH = path.join(os.homedir(), '.claude', 'mcp.json');
 
 // ---------------------------------------------------------------------------
