@@ -105,7 +105,7 @@ function writeMcpJson(filePath, data) {
 function buildBifrostEntry() {
   return {
     type: 'http',
-    url: BIFROST_URL,
+    url: '${BIFROST_URL}',
     headers: { 'x-bf-vk': '${BIFROST_VK}' }
   };
 }
