@@ -1,6 +1,6 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Bifrost MCP gateway plugin for Claude Code: memory auto-injection, skill discovery, one-command onboarding.",
   "author": {
     "name": "neXenio GmbH",
@@ -12,7 +12,6 @@
     "./skills/bifrost-debug",
     "./skills/bifrost-mcp-setup"
   ],
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json",
   "commands": [
     "./commands/bifrost-setup.md",

@@ -65,7 +65,7 @@ Owns: `.claude-plugin/`, `.mcp.json`, `bin/`, `commands/`, `.gitignore`, `README
 Owns: `hooks/`, `skills/`, `guidance/`, `AGENTS.md`
 
 **Cross-cutting rules:**
-- Manifests reference hooks only by path in `plugin.json` — never edit hook bodies for naming.
+- Do **not** declare `hooks/hooks.json` in `plugin.json` — CC auto-loads it; manifest `hooks` is only for *additional* hook files. Never edit hook bodies for naming.
 - Hooks reference the MCP server only by name (`bifrost`, skill tool prefix `<skills-server>-`) — never edit `.mcp.json`.
 
 ---

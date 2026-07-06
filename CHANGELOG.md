@@ -2,6 +2,13 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.0.1] — 2026-07-06
+
+### Fixed
+
+- Remove explicit `hooks` field from `plugin.json` — Claude Code auto-loads
+  `hooks/hooks.json`; declaring it caused a duplicate-hooks `/doctor` error.
+
 ## [1.0.0] — 2026-07-01
 
 ### Distribution-ready
