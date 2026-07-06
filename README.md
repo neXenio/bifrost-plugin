@@ -25,13 +25,18 @@ See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engine
 
 ## Configuration
 
-The plugin is driven by three env vars:
+The plugin is driven by env vars (set once — see [Persisting env vars](#persisting-env-vars)):
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `BIFROST_URL` | Gateway `/mcp` endpoint | `https://your-bifrost-gateway.example/mcp` (placeholder) |
-| `BIFROST_VK` | Virtual key for the `x-bf-vk` auth header | (unset — required) |
-| `BIFROST_SKILLS_SERVER` | Name of the gateway's skill server | `skills` |
+| `BIFROST_URL` | Gateway `/mcp` endpoint (include the `/mcp` path) | placeholder in `.mcp.json` |
+| `BIFROST_VK` | Virtual key for the `x-bf-vk` auth header (`vk_…` or `sk-bf-…`) | (unset — required) |
+| `BIFROST_SKILLS_SERVER` | Skill MCP server name — fallback for hook hints when auto-discovery cache is cold | `skills` |
+
+Hooks **auto-discover** the real skill-server name from your gateway's tool list
+(e.g. `lucaskills-skill_search` → server `lucaskills`). Check `/mcp` for the
+prefix on `*-skill_search` / `*-get_skill` and set `BIFROST_SKILLS_SERVER` to
+match if your gateway does not use the default `skills`.
 
 ---
 
@@ -45,24 +50,67 @@ operator, then:
 1. In Claude Code:
    ```
    /plugin marketplace add neXenio/bifrost-plugin
-   /plugin install bifrost-plugin
+   /plugin install bifrost-plugin@bifrost-marketplace
    ```
-2. Put your gateway URL + key in your shell profile:
-   ```bash
-   echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
-   echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
-   source ~/.zshrc
-   ```
+2. Persist gateway URL, key, and skill-server name (see [Persisting env vars](#persisting-env-vars)).
 3. Enable and restart Claude Code:
    ```
    /plugin enable bifrost-plugin
    ```
+
+To pick up a new plugin release:
+```
+/plugin marketplace update bifrost-marketplace
+/plugin install bifrost-plugin@bifrost-marketplace
+```
+
+### Persisting env vars
+
+Claude Code does **not** read `~/.zshrc` when launched from the Dock or Spotlight.
+Use **`~/.claude/settings.json`** so vars apply on every launch:
+
+```json
+{
+  "env": {
+    "BIFROST_URL": "https://<your-gateway-host>/mcp",
+    "BIFROST_VK": "vk_<your-key>",
+    "BIFROST_SKILLS_SERVER": "lucaskills"
+  }
+}
+```
+
+Also add the same exports to `~/.zshrc` (or `~/.bashrc`) if you use the gateway
+from a terminal. Restart Claude Code after editing settings.
+
+Example shell profile lines:
+
+```bash
+echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc
+echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
+echo 'export BIFROST_SKILLS_SERVER=lucaskills' >> ~/.zshrc   # if not "skills"
+source ~/.zshrc
+```
 
 The plugin ships a `.mcp.json`, so the `bifrost` MCP server wires itself from
 `$BIFROST_URL` / `$BIFROST_VK` when you enable it — no installer script needed.
 It ships **disabled** (`defaultEnabled: false`) so it stays dormant until you set
 your key. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
 `/bifrost-debug` if something's off.
+
+### Gateway skill discovery vs Bifrost Skills Repository
+
+These are **two different** skill paths — do not confuse them:
+
+| Path | How skills are accessed | Typical use |
+|------|-------------------------|-------------|
+| **MCP skill server** (`lucaskills-skill_search`, `get_skill`) | Runtime search over the gateway's skill index | What **this plugin** nudges you to use before non-trivial work |
+| **Bifrost Skills Repository marketplace** | `<gateway>/api/skills/serve/claude-code/.claude-plugin/marketplace.json` | Install individual skills as Claude Code plugins (`bifrost-<skill-name>`) |
+
+A skill published in the Bifrost dashboard may appear in the repository marketplace
+before it is ingested into the MCP skill index. If `get_skill` says a repository
+skill does not exist but the admin UI shows it, the MCP index may be stale — use
+the admin **Bump all-skills version** control or install the skill directly from
+the repository marketplace. See [Bifrost Skills Repository docs](https://docs.getbifrost.ai/features/skills-repository).
 
 ### Fallback — manual installer
 
@@ -73,12 +121,11 @@ which writes the entry into `~/.claude/mcp.json` directly:
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>   # then persist the exports as in step 2
+node bin/install.js --key vk_<your-key>   # then persist env vars as above
 ```
 
-> macOS note: Claude Code launched from the Dock or Spotlight does NOT inherit
-> `~/.zshrc` exports, so `BIFROST_VK` will be empty and the gateway gets no key.
-> Launch CC from a terminal, or set the env vars via a launchd plist.
+> **macOS:** Prefer `~/.claude/settings.json` (see above) over shell profile alone.
+> Dock/Spotlight launches do not inherit `~/.zshrc`.
 
 ---
 
@@ -117,18 +164,34 @@ The plugin writes one entry to `~/.claude/mcp.json`:
 }
 ```
 
-`${BIFROST_URL}` and `${BIFROST_VK}` are resolved at runtime from your shell
-environment. The key is never stored in any file.
+`${BIFROST_URL}` and `${BIFROST_VK}` are resolved at runtime from Claude Code's
+environment (`~/.claude/settings.json` `env` key and/or your shell). The key is
+never stored in any file.
+
+---
+
+## Verify
+
+After install, enable, and restart:
+
+1. `/mcp` — `bifrost` should be connected; note tool prefixes (e.g. `lucaskills-skill_search`).
+2. `/doctor` — no hook-load errors for `bifrost-plugin`.
+3. Call `mcp__bifrost__<skills-server>-skill_search` with a task description — should return matches.
+4. Type **"bifrost debug"** or `/bifrost-debug` for the full decision tree.
 
 ---
 
 ## Troubleshooting
 
-**401 / 403 from bifrost** — `BIFROST_VK` is missing or wrong. Re-export it.
+**401 / 403 from bifrost** — `BIFROST_VK` missing or wrong. Check `~/.claude/settings.json` `env` and restart CC.
 
-**Skill-search tool not found** — bifrost MCP not loaded, or your gateway exposes no skill server. Check `~/.claude/mcp.json` has the bifrost entry and restart Claude Code.
+**Skill-search tool not found** — bifrost MCP not loaded, or gateway exposes no skill server. Run `/mcp`; confirm tool names match `BIFROST_SKILLS_SERVER`.
 
-**Hooks not firing** — the hooks ship inside the plugin (`hooks/hooks.json`), not `~/.claude/settings.json`. Confirm the plugin is installed and enabled via `/plugin`, then restart Claude Code.
+**Repository skill missing from `skill_search` / `get_skill`** — skill may be in the Bifrost marketplace but not yet in the MCP index (see [Gateway skill discovery vs Bifrost Skills Repository](#gateway-skill-discovery-vs-bifrost-skills-repository)).
+
+**`/doctor` duplicate hooks** — fixed in v1.0.1; update the marketplace and reinstall.
+
+**Hooks not firing** — hooks ship inside the plugin (`hooks/hooks.json`, auto-loaded by Claude Code). Confirm installed + enabled via `/plugin`, then restart.
 
 Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` diagnosis flow.
 
@@ -177,7 +240,7 @@ try {
 } catch (e) { console.error('skip:', e.message); }
 "
 
-# 3. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
+# 3. Remove BIFROST_* from ~/.claude/settings.json env and ~/.zshrc / ~/.bashrc if you added them.
 ```
 
 ---
