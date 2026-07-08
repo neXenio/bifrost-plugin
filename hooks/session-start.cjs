@@ -116,5 +116,3 @@ function main() {
 }
 
 main();
-
-main();
