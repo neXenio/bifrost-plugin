@@ -2,6 +2,45 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.1.0] — 2026-07-07
+
+### Added — Claude Desktop support via OAuth (zero-config Connect)
+
+- **`bridge/` — OAuth 2.1 resource-server bridge** (new subproject, Node 20 +
+  Fastify + `jose`): makes the gateway's `/mcp` endpoint connectable from Claude
+  Desktop's connector UI, fixing `mcp_registration_failed`.
+  - RFC 9728 Protected Resource Metadata at
+    `/.well-known/oauth-protected-resource` (+ `/mcp` variant) and
+    `WWW-Authenticate: Bearer resource_metadata="…"` on unauthenticated 401s.
+  - Keycloak token validation: issuer, signature (remote JWKS), expiry,
+    **audience binding** (RFC 8707 — cross-audience tokens rejected), required
+    scope (`mcp:read` by default).
+  - Per-user **claim→virtual-key mapping** (`email` then `sub`,
+    case-insensitive), deny-by-default for unmapped users; Bearer stripped
+    before forwarding; VK/token headers redacted from logs.
+  - **VK-map sync job** (`bridge/src/sync-vk-map.mjs`, `npm run sync`): periodic
+    export of Bifrost's SSO-provisioned user→VK table
+    (`GET /api/governance/virtual-keys` with an admin token) into `vk-map.json`
+    — Bifrost stays the single source of truth, no hand-maintained mapping, and
+    the admin credential never sits in the request path. Atomic writes,
+    change-detection, empty-result guard, `--dry-run`, one-shot (cron) or
+    interval (compose `vk-sync` sidecar) modes, field-path overrides for
+    response-shape differences (`VK_SYNC_EMAIL_PATH` / `VK_SYNC_VALUE_PATH`).
+  - `x-bf-vk` / `x-api-key` passthrough — the Claude Code CLI header path is
+    untouched.
+  - Dockerfile + Caddy→bridge→Bifrost compose example; 20 unit tests
+    (`npm test`); Keycloak realm runbook (`bridge/docs/keycloak-setup.md`:
+    DCR policies, PKCE S256 enforcement, audience mapper, test client).
+- **Docs & skills:** README *Authentication modes* section (Desktop OAuth,
+  Desktop `mcp-remote` fallback, CLI header); `bifrost-onboard` step 6 (Desktop
+  connect); `bifrost-debug` step 7 (Desktop/OAuth decision tree + new symptom
+  rows); `bifrost-mcp-setup` Claude Desktop section; auth-mode notes in
+  `guidance/bifrost-context.md` and `guidance/bifrost-guide.md`.
+
+### Unchanged
+
+- `.mcp.json` / `bin/install.js` — Claude Code wiring and header auth as before.
+
 ## [1.0.1] — 2026-07-06
 
 ### Fixed

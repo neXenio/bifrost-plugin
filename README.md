@@ -3,7 +3,8 @@
 Claude Code plugin for any [Bifrost](https://github.com/maximhq/bifrost) MCP
 gateway: one-command setup, skill discovery, and agent-driven memory via MCP.
 
-**Scope: Claude Code only.** Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
+**Scope: Claude Code, plus Claude Desktop via OAuth** (see [Authentication modes](#authentication-modes)).
+Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
 
 The skill-discovery and memory features need a gateway that exposes a skill server
 and/or a memory server. Without them, the plugin still wires up the gateway and
@@ -20,6 +21,50 @@ degrades gracefully — those features simply no-op.
 | 3 — Agent-driven memory | The agent recalls relevant context via the gateway's memory MCP tools before non-trivial tasks, and saves decisions after significant work — no automatic injection |
 
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
+
+---
+
+## Authentication modes
+
+The same gateway supports three ways to connect, depending on the client:
+
+| Client | Auth | Setup |
+|---|---|---|
+| **Claude Desktop (recommended)** | OAuth 2.1 via the company Keycloak | Settings → Connectors → Add custom connector → paste `https://bifrost.luca-app.de/mcp` → log in with your company account. Zero further config. |
+| **Claude Desktop (fallback)** | Local `mcp-remote` proxy injecting your VK | See snippet below — only needed if the OAuth bridge is unavailable |
+| **Claude Code CLI** | `x-bf-vk` header from `${BIFROST_VK}` | Unchanged — everything in [Install](#install) below |
+
+**Desktop OAuth notes:**
+
+- The gateway runs behind an [OAuth bridge](./bridge/README.md) that validates
+  Keycloak tokens and maps your identity to your personal virtual key, so
+  budgets/rate-limits still apply. If you can log in but get
+  `no_virtual_key`, ask the gateway operator to add you to the VK map.
+- If the connector UI reports it cannot register a client, use its
+  **Advanced settings → OAuth Client ID** field with the client ID your
+  operator provides (pre-registered fallback).
+
+**Desktop fallback — local proxy** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "bifrost": {
+      "command": "npx",
+      "args": [
+        "mcp-remote", "https://bifrost.luca-app.de/mcp",
+        "--transport", "http-only",
+        "--header", "x-bf-vk:${BIFROST_VK}"
+      ],
+      "env": { "BIFROST_VK": "vk_<your-key>" }
+    }
+  }
+}
+```
+
+No spaces around `:` in the `--header` arg (argument-parsing quirk on some
+platforms). This file then contains your key — treat it as a secret and keep
+its permissions tight.
 
 ---
 
@@ -192,6 +237,8 @@ After install, enable, and restart:
 **`/doctor` duplicate hooks** — fixed in v1.0.1; update the marketplace and reinstall.
 
 **Hooks not firing** — hooks ship inside the plugin (`hooks/hooks.json`, auto-loaded by Claude Code). Confirm installed + enabled via `/plugin`, then restart.
+
+**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old zrok link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping).
 
 Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` diagnosis flow.
 

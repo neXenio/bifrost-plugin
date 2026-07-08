@@ -1,6 +1,6 @@
 ---
 name: bifrost-debug
-description: "Diagnose why a Bifrost gateway, memory injection, or skill discovery isn't working in Claude Code. Triggers on 'bifrost not working', 'mcp not connecting', 'memory not injecting', 'skill_search failing', '401/403 from bifrost', 'bifrost debug', 'gateway unreachable'."
+description: "Diagnose why a Bifrost gateway, memory injection, or skill discovery isn't working in Claude Code or Claude Desktop. Triggers on 'bifrost not working', 'mcp not connecting', 'memory not injecting', 'skill_search failing', '401/403 from bifrost', 'bifrost debug', 'gateway unreachable', 'mcp_registration_failed', 'desktop connector failing', 'oauth error'."
 ---
 
 # Bifrost Diagnostics
@@ -82,6 +82,28 @@ mcp__bifrost__<skills-server>-skill_search("test connection")
 - Tool not found → bifrost MCP server not loaded in this session (restart CC), or your gateway has no skill server.
 - 401/403 → re-check VK (step 1).
 
+## 7. Claude Desktop issues (OAuth path)
+
+Desktop connects via OAuth through the gateway's bridge — not via `BIFROST_VK`.
+Work through these in order:
+
+1. **`mcp_registration_failed` on Connect** — is the connector URL the stable
+   gateway domain (e.g. `https://bifrost.luca-app.de/mcp`)? Old ephemeral
+   tunnel URLs (`*.share.zrok.io`) have no OAuth bridge and will always fail.
+2. **Check OAuth discovery is live:**
+   ```bash
+   curl -s https://<stable-gateway-host>/.well-known/oauth-protected-resource   # → JSON with authorization_servers
+   curl -si https://<stable-gateway-host>/mcp | grep -i www-authenticate        # → Bearer resource_metadata="…"
+   ```
+   Missing either → the bridge is down or misrouted (gateway operator issue).
+3. **Check the authorization server supports DCR:**
+   ```bash
+   curl -s <keycloak>/realms/mcp/.well-known/oauth-authorization-server | grep registration_endpoint
+   ```
+   Missing → anonymous client registration is disabled in Keycloak; use the
+   pre-registered client ID in the connector's Advanced settings instead.
+4. **Login works but tools fail** — see the symptom map below (audience/scope/VK-map).
+
 ## Symptom → cause map
 
 | Symptom | Cause | Fix |
@@ -91,6 +113,12 @@ mcp__bifrost__<skills-server>-skill_search("test connection")
 | `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `~/.claude/mcp.json`; restart CC |
 | Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
+| Desktop: `mcp_registration_failed` | Wrong/ephemeral URL, bridge down, or Keycloak DCR off | Steps 7.1–7.3 above |
+| Desktop: `Invalid redirect URI` | Gateway public URL changed since the client registered, or DCR redirect-URI policy too strict | Remove + re-add the connector; operator: check Keycloak allowed redirect URIs |
+| Desktop: 401 `invalid_token` after successful login | Token audience/issuer mismatch (Keycloak audience mapper missing or wrong `BRIDGE_PUBLIC_ORIGIN`) | Gateway operator: verify audience mapper = bridge origin |
+| Desktop: 403 `insufficient_scope` | Token lacks the required `mcp:read` scope | Operator: add scope to the realm's default/allowed client scopes |
+| Desktop: 403 `no_virtual_key` | Authenticated but not in the bridge's VK map (deny-by-default) | Operator: assign the user a VK in Bifrost (the sync job exports it within one interval), check the `vk-sync` job is running, or add a manual map entry |
+| Desktop: access suddenly denied | Token expired without refresh, or Keycloak session revoked | Reconnect (re-login) in the connector |
 
 For manual MCP wiring: `/bifrost-mcp-setup`.
 For fresh onboarding: `/bifrost-onboard`.

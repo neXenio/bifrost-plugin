@@ -5,6 +5,7 @@
 *.pem
 *_VK=*
 *vk_*.txt
+bridge/vk-map.json
 
 # Node
 node_modules/
