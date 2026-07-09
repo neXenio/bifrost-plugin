@@ -31,3 +31,6 @@ Thumbs.db
 
 .omc/
 .DS_Store
+
+# Desktop workaround local test artifacts
+desktop-workaround/*.local.json

@@ -2,6 +2,15 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`desktop-workaround/`** — temporary macOS Claude Desktop setup: download
+  `setup.sh` from GitHub, bootstrap Node if needed, configure local
+  `mcp-remote` bridge with virtual-key auth. Coworker docs: `GUIDE.md`,
+  `PROMPT.md`, `company-urls.md`.
+
 ## [1.0.1] — 2026-07-06
 
 ### Fixed
