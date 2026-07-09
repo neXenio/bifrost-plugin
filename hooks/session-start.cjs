@@ -118,5 +118,3 @@ function main() {
 }
 
 main();
-
-main();
