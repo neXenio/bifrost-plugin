@@ -260,9 +260,14 @@ function entriesEqual(a, b) {
 
 const config = readConfig(configPath);
 
-if (mode === 'uninstall') {
+if (mode === 'uninstall' || mode === 'uninstall-dry-run') {
   if (!config.mcpServers[SERVER_NAME]) {
     console.log('[bifrost-desktop] No bifrost entry present — nothing to remove.');
+    process.exit(0);
+  }
+  if (mode === 'uninstall-dry-run') {
+    console.log('[bifrost-desktop] Dry run — would remove bifrost from:');
+    console.log('  ' + configPath);
     process.exit(0);
   }
   delete config.mcpServers[SERVER_NAME];
@@ -304,7 +309,9 @@ console.log('(' + configPath + ' now contains your virtual key — keep it priva
 NODE_EOF
 
 MODE="install"
-if [ "$UNINSTALL" -eq 1 ]; then
+if [ "$UNINSTALL" -eq 1 ] && [ "$DRY_RUN" -eq 1 ]; then
+  MODE="uninstall-dry-run"
+elif [ "$UNINSTALL" -eq 1 ]; then
   MODE="uninstall"
 elif [ "$DRY_RUN" -eq 1 ]; then
   MODE="dry-run"
