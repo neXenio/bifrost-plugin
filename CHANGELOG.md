@@ -2,6 +2,17 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **`desktop-quickstart/`** — temporary macOS Claude Desktop setup: a single
+  self-contained `setup.sh`, piped straight from GitHub
+  (`curl | bash`), that bootstraps Node if needed, prompts for your virtual key
+  with hidden input (never touches shell history), and configures a local
+  `mcp-remote` bridge with `x-bf-vk` header auth. Coworker guide:
+  `desktop-quickstart/README.md`.
+
 ## [1.0.1] — 2026-07-06
 
 ### Fixed

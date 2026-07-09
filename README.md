@@ -3,7 +3,7 @@
 Claude Code plugin for any [Bifrost](https://github.com/maximhq/bifrost) MCP
 gateway: one-command setup, skill discovery, and agent-driven memory via MCP.
 
-**Scope: Claude Code only.** Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
+**Scope: Claude Code** (Claude Desktop temporary setup: see [desktop-quickstart/README.md](./desktop-quickstart/README.md)). Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
 
 The skill-discovery and memory features need a gateway that exposes a skill server
 and/or a memory server. Without them, the plugin still wires up the gateway and
@@ -20,6 +20,12 @@ degrades gracefully — those features simply no-op.
 | 3 — Agent-driven memory | The agent recalls relevant context via the gateway's memory MCP tools before non-trivial tasks, and saves decisions after significant work — no automatic injection |
 
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
+
+### Claude Desktop (temporary)
+
+Until OAuth Connect is deployed, coworkers on macOS can use the local-bridge
+workaround — one command, no git checkout:
+[desktop-quickstart/README.md](./desktop-quickstart/README.md).
 
 ---
 

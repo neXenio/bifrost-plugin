@@ -31,3 +31,6 @@ Thumbs.db
 
 .omc/
 .DS_Store
+
+# Desktop quickstart local test artifacts
+desktop-quickstart/*.local.json
