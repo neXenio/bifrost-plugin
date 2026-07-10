@@ -34,9 +34,41 @@ The plugin is driven by env vars (set once — see [Persisting env vars](#persis
 | `BIFROST_SKILLS_SERVER` | Skill MCP server name — fallback for hook hints when auto-discovery cache is cold | `skills` |
 
 Hooks **auto-discover** the real skill-server name from your gateway's tool list
-(e.g. `lucaskills-skill_search` → server `lucaskills`). Check `/mcp` for the
+(e.g. `skills-skill_search` → server `skills`). Check `/mcp` for the
 prefix on `*-skill_search` / `*-get_skill` and set `BIFROST_SKILLS_SERVER` to
 match if your gateway does not use the default `skills`.
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `BIFROST_KB_WING` | Knowledgebase wing/scope passed as `wing=` to the memory server's `memory_search` | (unset — KB recall skipped) |
+| `BIFROST_KB_QUERY` | Query string used for the KB recall (falls back to the per-project memory query) | project-derived query |
+| `BIFROST_KB_INJECT` | Set to `0` to disable the KB recall header at session start | (enabled) |
+| `BIFROST_MEMORY_INJECT` | Set to `0` to disable the memory recall header at session start | (enabled) |
+| `BIFROST_SKILLS_INJECT` | Set to `0` to disable the skill-library primer at session start | (enabled) |
+| `BIFROST_DEV_SYNC` | Set to `0` to disable the dev-checkout plugin-cache self-heal (`scripts/sync-plugin-cache.sh`) | (enabled for git checkouts) |
+| `BIFROST_KEYAPP_URL` | SSO keyapp URL for one-command auto-onboarding (`hooks/auto-setup.cjs`) | (unset — auto-onboarding skipped) |
+| `BIFROST_AUTOSETUP` | Set to `0` to disable the one-command auto-onboarding flow | (enabled when `BIFROST_KEYAPP_URL` is set) |
+
+Injected memory/KB sizing is adaptive, not a flat fact count — `hooks/refresh.cjs`
+fetches a wider candidate pool from `memory_search`, then keeps the most similar
+results within a character budget (higher-similarity facts get a larger snippet):
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `BIFROST_MEMORY_MAX_FACTS` | Cap on facts injected per section (memory, KB) | `6` |
+| `BIFROST_MEMORY_SNIPPET_LEN` | Base per-fact snippet length in characters | `180` |
+| `BIFROST_INJECT_BUDGET` | Total character budget per section (~4 chars/token) | `2000` (~500 tokens) |
+| `BIFROST_MEMORY_MIN_SIM` | Drop `memory_search` results below this similarity score | `0.45` |
+| `BIFROST_MEMORY_FAST` | Set to `1` to pass `fast:true` to `memory_search` (server-side fast path) | `0` (off — opt-in until the gateway ships the param) |
+
+If `memory_search` returns similarity/score metadata, results are ranked and
+budget-filled; if not (or the response isn't parseable JSON), it falls back to
+the original flat-cap behavior so recall never breaks on an older gateway.
+
+There is **no separate KB MCP server** — KB recall is `memory_search` against
+the memory server, scoped to the KB wing via `wing=<BIFROST_KB_WING>`. No wing
+name is assumed by default, so KB recall stays off until you set
+`BIFROST_KB_WING` to match your gateway's knowledgebase scope.
 
 ---
 
@@ -74,7 +106,7 @@ Use **`~/.claude/settings.json`** so vars apply on every launch:
   "env": {
     "BIFROST_URL": "https://<your-gateway-host>/mcp",
     "BIFROST_VK": "vk_<your-key>",
-    "BIFROST_SKILLS_SERVER": "lucaskills"
+    "BIFROST_SKILLS_SERVER": "skills"
   }
 }
 ```
@@ -87,7 +119,7 @@ Example shell profile lines:
 ```bash
 echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc
 echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
-echo 'export BIFROST_SKILLS_SERVER=lucaskills' >> ~/.zshrc   # if not "skills"
+echo 'export BIFROST_SKILLS_SERVER=skills' >> ~/.zshrc   # if not "skills"
 source ~/.zshrc
 ```
 
@@ -103,7 +135,7 @@ These are **two different** skill paths — do not confuse them:
 
 | Path | How skills are accessed | Typical use |
 |------|-------------------------|-------------|
-| **MCP skill server** (`lucaskills-skill_search`, `get_skill`) | Runtime search over the gateway's skill index | What **this plugin** nudges you to use before non-trivial work |
+| **MCP skill server** (`skills-skill_search`, `get_skill`) | Runtime search over the gateway's skill index | What **this plugin** nudges you to use before non-trivial work |
 | **Bifrost Skills Repository marketplace** | `<gateway>/api/skills/serve/claude-code/.claude-plugin/marketplace.json` | Install individual skills as Claude Code plugins (`bifrost-<skill-name>`) |
 
 A skill published in the Bifrost dashboard may appear in the repository marketplace
@@ -174,7 +206,7 @@ never stored in any file.
 
 After install, enable, and restart:
 
-1. `/mcp` — `bifrost` should be connected; note tool prefixes (e.g. `lucaskills-skill_search`).
+1. `/mcp` — `bifrost` should be connected; note tool prefixes (e.g. `skills-skill_search`).
 2. `/doctor` — no hook-load errors for `bifrost-plugin`.
 3. Call `mcp__bifrost__<skills-server>-skill_search` with a task description — should return matches.
 4. Type **"bifrost debug"** or `/bifrost-debug` for the full decision tree.
@@ -219,6 +251,20 @@ Memory: agent calls mcp__bifrost__<memory-server>-search before tasks,
 ```
 
 All hooks silent-fail: any error exits 0 silently so they never block a prompt.
+See [hooks/HOOK-VERIFICATION.md](./hooks/HOOK-VERIFICATION.md) for the wired
+events and hook conventions.
+
+### Development
+
+- `scripts/sync-plugin-cache.sh` — point the installed plugin cache at this
+  checkout's HEAD so a dev-from-checkout can iterate without a marketplace
+  reinstall. `session-start.cjs` re-runs it automatically (best-effort,
+  detached) whenever it detects it's running from a `.git` checkout;
+  disable with `BIFROST_DEV_SYNC=0`.
+- `scripts/settings-lint.sh` — scope-drift guard (see
+  [docs/settings-policy.md](./docs/settings-policy.md)): fails if a real
+  virtual key gets committed to the repo, or this checkout's local path leaks
+  into `~/.claude/mcp.json` / `~/.claude/settings.json`.
 
 ---
 

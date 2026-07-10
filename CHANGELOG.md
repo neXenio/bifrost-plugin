@@ -2,6 +2,58 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [Unreleased]
+
+## [1.1.0] — 2026-07-09
+
+### Changed
+
+- **Adaptive memory/KB injection sizing.** `hooks/refresh.cjs` no longer
+  applies a flat fact cap and snippet length: it fetches a wider candidate
+  pool from `memory_search` (parsed as structured JSON with
+  content/similarity, not just regex-scraped text), then greedily fills a
+  character budget from the most similar results, giving higher-similarity
+  facts a larger snippet allowance. New knobs: `BIFROST_MEMORY_MAX_FACTS`,
+  `BIFROST_MEMORY_SNIPPET_LEN`, `BIFROST_INJECT_BUDGET`,
+  `BIFROST_MEMORY_MIN_SIM`. Falls back to the original flat-cap behavior
+  when the response isn't parseable structured JSON, so recall never
+  regresses on an older gateway. `session-start.cjs`'s `emitMemory`/`emitKb`
+  now handle both the new `{content, similarity}` fact shape and the old
+  plain-string shape (stale caches keep working through the upgrade).
+  `BIFROST_MEMORY_FAST=1` opts into passing `fast:true` to `memory_search`
+  (server-side fast path) once the gateway ships it; off by default since an
+  unrecognized param could reject the call on a strict schema.
+
+### Added
+
+- **Knowledgebase auto-injection.** `hooks/refresh.cjs` now also queries the
+  KB wing (`memory_search` with `wing=<BIFROST_KB_WING>`, no default — KB
+  recall is skipped entirely unless `BIFROST_KB_WING` is set, plus
+  `BIFROST_KB_QUERY`) and caches it alongside memory. `session-start.cjs`
+  gained `emitKb()`, wired next to `emitSkills`/`emitMemory`, disable with
+  `BIFROST_KB_INJECT=0`. There is no separate KB MCP server — KB recall goes
+  through the same memory server as memory recall, just scoped to a
+  different wing. Additive, ships `defaultEnabled: false`.
+- `hooks/auto-setup.cjs` — one-command onboarding worker (loopback SSO
+  callback → `claude mcp add`), reviewed and landed. No default keyapp/gateway
+  URL is assumed — it's a no-op unless the gateway operator sets
+  `BIFROST_KEYAPP_URL` (and `BIFROST_URL`) for their own deployment.
+
+### Removed
+
+- `mcpServers` pointer from `.claude-plugin/plugin.json` — the root
+  `.mcp.json` is auto-discovered by Claude Code, so the pointer was
+  redundant.
+- `scripts/sync-plugin-cache.sh` — points the installed plugin cache at the
+  current checkout's HEAD for dev-from-checkout iteration without a
+  marketplace reinstall; `session-start.cjs` self-heals this automatically
+  for git checkouts (`BIFROST_DEV_SYNC=0` to disable).
+- `scripts/settings-lint.sh` + `docs/settings-policy.md` — scope-drift guard:
+  fails if a real virtual key is committed to the repo, or this checkout's
+  local path leaks into `~/.claude/mcp.json` / `~/.claude/settings.json`.
+- `hooks/HOOK-VERIFICATION.md` — documents wired hook events and conventions
+  ($CLAUDE_PLUGIN_ROOT, explicit per-hook timeouts, silent-fail contract).
+
 ## [1.0.1] — 2026-07-06
 
 ### Fixed

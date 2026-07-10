@@ -15,7 +15,7 @@ Run `/mcp` to see what loaded. A gateway exposes upstream servers in one of two
 modes, and **the same gateway usually mixes both**:
 
 1. **Flat tools** — callable directly, namespaced `mcp__bifrost__<server>-<tool>`
-   (e.g. `mcp__bifrost__lucaskills-skill_search`).
+   (e.g. `mcp__bifrost__skills-skill_search`).
 2. **Code-mode** — most servers are *not* flat tools. They are reached through the
    meta-tool **`executeToolCode`**, which runs a short Starlark/Python snippet:
 

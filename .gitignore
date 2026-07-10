@@ -31,3 +31,6 @@ Thumbs.db
 
 .omc/
 .DS_Store
+
+# Internal handover / working docs — not part of the shipped plugin
+HANDOVER-*.md
