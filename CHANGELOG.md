@@ -4,6 +4,48 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-18
+
+Remediation release: removes every hook side effect that organization plugin
+review flags, so the plugin can pass marketplace import screening. Auth is
+unchanged (`x-bf-vk` header, `BIFROST_URL`/`BIFROST_VK` env).
+
+### Changed
+
+- **SessionStart hook no longer has side effects beyond its own cache.** It
+  emits cached context and (at most once per hour, configurable via
+  `BIFROST_REFRESH_INTERVAL_MS`) spawns the detached gateway refresh. New
+  master kill switch `BIFROST_REFRESH=0` disables all session-start-initiated
+  network traffic. The refresh query contains only the project directory
+  basename plus a fixed recall phrase.
+- **Onboarding is explicit-only.** The SSO browser flow (`hooks/auto-setup.cjs`,
+  gated on `BIFROST_KEYAPP_URL`) now runs only when the user invokes
+  `/bifrost-setup`. No hook opens a browser or writes configuration.
+- **`bin/install.js` no longer edits config files.** It is a thin wrapper over
+  `claude mcp add --scope user` — Claude Code's own config writer. The previous
+  target (`~/.claude/mcp.json`) was not a file Claude Code reads.
+- **Gateway client refuses cleartext key transport.** `hooks/lib/gateway.cjs`
+  only sends the `x-bf-vk` header over HTTPS (plain HTTP allowed to loopback
+  for local dev gateways).
+- **Manifest slimmed to schema-guaranteed fields.** `plugin.json` drops the
+  redundant `skills`/`commands` arrays (both directories are auto-discovered)
+  and `defaultEnabled`, which moves to the marketplace plugin entry (the
+  documented precedence location and the only one present in the published
+  schemas). `marketplace.json` gains the top-level `description` that
+  `claude plugin validate --strict` requires.
+- All four `commands/*.md` gained YAML frontmatter (`description:`), fixing
+  `claude plugin validate --strict` failures.
+
+### Removed
+
+- `hooks/session-start.cjs` dev-cache "self-heal" (`BIFROST_DEV_SYNC`) and
+  `scripts/sync-plugin-cache.sh` — a hook must not rewrite Claude Code's
+  `installed_plugins.json` or re-point the plugin cache.
+- SessionStart auto-spawn of the onboarding worker (`BIFROST_AUTOSETUP`).
+- `scripts/settings-lint.sh`, `docs/settings-policy.md`,
+  `hooks/HOOK-VERIFICATION.md` — dev tooling that the v1.1.0 changelog already
+  declared removed but that still shipped; now actually gone.
+
 ## [1.1.0] — 2026-07-09
 
 ### Changed
@@ -44,15 +86,11 @@ All notable changes to bifrost-plugin are documented here.
 - `mcpServers` pointer from `.claude-plugin/plugin.json` — the root
   `.mcp.json` is auto-discovered by Claude Code, so the pointer was
   redundant.
-- `scripts/sync-plugin-cache.sh` — points the installed plugin cache at the
-  current checkout's HEAD for dev-from-checkout iteration without a
-  marketplace reinstall; `session-start.cjs` self-heals this automatically
-  for git checkouts (`BIFROST_DEV_SYNC=0` to disable).
-- `scripts/settings-lint.sh` + `docs/settings-policy.md` — scope-drift guard:
-  fails if a real virtual key is committed to the repo, or this checkout's
-  local path leaks into `~/.claude/mcp.json` / `~/.claude/settings.json`.
-- `hooks/HOOK-VERIFICATION.md` — documents wired hook events and conventions
-  ($CLAUDE_PLUGIN_ROOT, explicit per-hook timeouts, silent-fail contract).
+
+> Correction (1.2.0): this release's original notes also listed
+> `scripts/sync-plugin-cache.sh`, `scripts/settings-lint.sh`,
+> `docs/settings-policy.md`, and `hooks/HOOK-VERIFICATION.md` as removed, but
+> they still shipped in 1.1.0. They were actually removed in 1.2.0.
 
 ## [1.0.1] — 2026-07-06
 

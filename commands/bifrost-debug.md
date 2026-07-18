@@ -1,3 +1,7 @@
+---
+description: Diagnose why the Bifrost gateway, memory injection, or skill discovery isn't working.
+---
+
 # /bifrost-debug
 
 Diagnose why the Bifrost gateway, memory injection, or skill discovery isn't

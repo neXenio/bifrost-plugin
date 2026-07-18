@@ -1,7 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "bifrost-marketplace",
-  "version": "1.1.0",
+  "version": "1.2.0",
+  "description": "Marketplace for the Bifrost MCP gateway plugin for Claude Code.",
   "owner": {
     "name": "neXenio GmbH",
     "url": "https://github.com/neXenio"
@@ -10,7 +11,8 @@
     {
       "name": "bifrost-plugin",
       "source": "./",
-      "description": "Bifrost MCP gateway plugin for Claude Code (memory + skills + onboarding)."
+      "description": "Bifrost MCP gateway plugin for Claude Code (memory + skills + onboarding).",
+      "defaultEnabled": false
     }
   ]
 }

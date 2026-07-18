@@ -6,8 +6,16 @@
 //   2. Emit a skill-library primer + a recalled-memory header, both read from a
 //      per-project cache (instant). First session has no cache → those sections
 //      are omitted but the cache gets seeded for next time.
-//   3. Spawn a detached background worker (refresh.cjs) that talks to the gateway
-//      and refreshes the cache. It outlives this hook and never delays startup.
+//   3. If the cache is missing or stale, spawn a detached background worker
+//      (refresh.cjs) that talks to the gateway and refreshes it. It outlives
+//      this hook and never delays startup. The query it sends contains only the
+//      project directory basename plus a fixed recall phrase — nothing else
+//      leaves the machine. Disable all background refresh (and thereby all
+//      session-start-initiated network traffic) with BIFROST_REFRESH=0.
+//
+// This hook only reads/writes its own cache under ~/.cache/bifrost-plugin/.
+// It never launches other programs, opens browsers, or touches Claude Code
+// configuration — onboarding is exclusively the explicit /bifrost-setup command.
 //
 // Disable memory/skills/kb headers with BIFROST_MEMORY_INJECT=0 /
 // BIFROST_SKILLS_INJECT=0 / BIFROST_KB_INJECT=0.
@@ -123,78 +131,24 @@ function emitKb(cache) {
   process.stdout.write(lines.join('\n'));
 }
 
-const SETUP_RESULT = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-setup-result.json');
-const SETUP_COOLDOWN_MS = parseInt(process.env.BIFROST_SETUP_COOLDOWN_MS || String(30 * 60 * 1000), 10);
-
-function readSetupResult() {
-  try { return JSON.parse(fs.readFileSync(SETUP_RESULT, 'utf8')); } catch (_) { return null; }
-}
-
-function writeSetupResult(obj) {
-  try {
-    fs.mkdirSync(path.dirname(SETUP_RESULT), { recursive: true });
-    fs.writeFileSync(SETUP_RESULT, JSON.stringify({ at: Date.now(), ...obj }), 'utf8');
-  } catch (_) {}
-}
-
-// Already connected? Legacy env users (BIFROST_VK set) and anyone the worker has
-// already provisioned (marker ok) need nothing.
-function isProvisioned(r) {
-  if ((process.env.BIFROST_VK || '').trim()) return true;
-  return !!(r && r.ok);
-}
-
-// First-run onboarding: when no key is configured, launch the detached browser flow
-// (auto-setup.cjs). Transparent if the user holds a valid SSO cookie; on failure the
-// worker leaves a marker and we surface a one-line warning next session. The browser
-// is only re-opened once per cooldown so repeated failures don't spam tabs.
-//
-// This whole flow is opt-in per deployment: without BIFROST_KEYAPP_URL configured
-// there is no generic keyapp to open, so we stay silent rather than nagging users
-// on gateways that don't offer this onboarding path.
-function maybeAutoSetup() {
-  if (process.env.BIFROST_AUTOSETUP === '0') return;
-  if (!(process.env.BIFROST_KEYAPP_URL || '').trim()) return;
-  const r = readSetupResult();
-  if (isProvisioned(r)) return;
-  const last = r && typeof r.at === 'number' ? r.at : 0;
-  if (Date.now() - last > SETUP_COOLDOWN_MS) {
-    process.stdout.write('\n⚙️ Bifrost: opening your browser to connect access (transparent if you are signed in via SSO). Restart Claude Code once it completes; run `/bifrost-setup` to retry.\n');
-    // Write the intent marker synchronously before spawning so a concurrent
-    // session start within the cooldown window sees a fresh `at` and skips
-    // spawning its own auto-setup worker.
-    writeSetupResult({ ok: false, reason: 'in-progress' });
-    try {
-      spawn(process.execPath, [path.join(__dirname, 'auto-setup.cjs')],
-        { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }).unref();
-    } catch (_) {}
-  } else if (r && !r.ok) {
-    process.stdout.write(`\n⚠️ Bifrost access not connected yet (last attempt: ${r.reason || 'failed'}). Run \`/bifrost-setup\` to retry.\n`);
-  }
-}
-
-// Dev-checkout self-heal: when this hook is running out of a git checkout
-// (not a marketplace-installed cache dir), the installed plugin cache can go
-// stale — Claude Code keeps loading the last-synced snapshot instead of the
-// live checkout. If scripts/sync-plugin-cache.sh exists alongside this
-// checkout, re-run it in the background so the next session picks up live
-// edits without a manual reinstall. Best-effort, detached, silent-fail;
-// disable with BIFROST_DEV_SYNC=0.
-function maybeSelfHealDevCache() {
-  if (process.env.BIFROST_DEV_SYNC === '0') return;
-  const root = path.join(__dirname, '..');
-  if (!fs.existsSync(path.join(root, '.git'))) return; // only for dev checkouts
-  const script = path.join(root, 'scripts', 'sync-plugin-cache.sh');
-  if (!fs.existsSync(script)) return;
-  try {
-    spawn('bash', [script], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }).unref();
-  } catch (_) {}
-}
+// How often the background refresh may re-contact the gateway. Independent of
+// CACHE_TTL_MS (how long cached content is considered emittable) so recall
+// stays warm without a network round-trip on every single session start.
+const REFRESH_INTERVAL_MS = parseInt(
+  process.env.BIFROST_REFRESH_INTERVAL_MS || String(60 * 60 * 1000), 10);
 
 // Fire-and-forget background refresh — detached + unref so it never blocks.
+// Skipped entirely with BIFROST_REFRESH=0 (master kill switch: no session-start
+// network traffic of any kind), and skipped while the cache file is younger
+// than REFRESH_INTERVAL_MS so session starts don't beacon the gateway.
 function spawnRefresh(file) {
+  if (process.env.BIFROST_REFRESH === '0') return;
   const { url, vk } = gw.env();
   if (!url || !vk) return;
+  try {
+    const age = Date.now() - fs.statSync(file).mtimeMs;
+    if (age < REFRESH_INTERVAL_MS) return;
+  } catch (_) { /* no cache yet — refresh */ }
   try {
     spawn(
       process.execPath,
@@ -207,14 +161,12 @@ function spawnRefresh(file) {
 function main() {
   try {
     emitContext();
-    try { maybeAutoSetup(); } catch (_) {}
     const file = cacheFile();
     const cache = readCache(file);
     try { emitSkills(cache); } catch (_) {}
     try { emitMemory(cache); } catch (_) {}
     try { emitKb(cache); } catch (_) {}
     spawnRefresh(file);
-    try { maybeSelfHealDevCache(); } catch (_) {}
   } catch (_) { /* silent-fail — never block session start */ }
   process.exit(0);
 }

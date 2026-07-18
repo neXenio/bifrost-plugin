@@ -1,3 +1,7 @@
+---
+description: Manually register the Bifrost MCP server when the automated setup can't run.
+---
+
 # /bifrost-mcp-setup
 
 Manually wire the Bifrost MCP server into Claude Code when the automated installer

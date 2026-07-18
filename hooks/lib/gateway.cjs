@@ -37,6 +37,10 @@ function rpc(method, params, timeoutMs) {
   return new Promise((resolve) => {
     let u;
     try { u = new URL(url); } catch (_) { return resolve(null); }
+    // Never send the x-bf-vk key in cleartext: plain http is only allowed to
+    // loopback (local dev gateways). Anything else must be https.
+    const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopback)) return resolve(null);
     const payload = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
     const lib = u.protocol === 'http:' ? http : https;
     const req = lib.request(

@@ -18,13 +18,15 @@ If missing: `export BIFROST_URL=https://<your-gateway-host>/mcp` and
 `export BIFROST_VK=vk_<your-key>` (add both to `~/.zshrc` or `~/.bashrc`).
 Symptom if the VK is wrong/missing: 401 or 403 from every bifrost tool call.
 
-## 2. Check bifrost is in ~/.claude/mcp.json
+## 2. Check the bifrost MCP server is registered
 
 ```bash
-node -e "const m=require(require('os').homedir()+'/.claude/mcp.json'); console.log(m.mcpServers?.bifrost ? 'bifrost: OK' : 'bifrost: MISSING')"
+claude mcp get bifrost 2>/dev/null || echo 'bifrost: MISSING at user scope'
 ```
 
-If missing: run `/bifrost-mcp-setup` for manual wiring instructions.
+The server can come from either the plugin's shipped `.mcp.json` (plugin
+installed + enabled → shows up in `/mcp`) or a user-scope registration.
+If neither: run `/bifrost-mcp-setup` for manual wiring instructions.
 Then restart Claude Code for CC to pick up the change.
 
 ## 3. Check gateway reachability
@@ -88,7 +90,7 @@ mcp__bifrost__<skills-server>-skill_search("test connection")
 |---------|-------|-----|
 | 401 on every bifrost call | `BIFROST_VK` wrong or missing | Set env var, restart CC |
 | 403 | Key valid but no permission | Contact gateway operator |
-| `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `~/.claude/mcp.json`; restart CC |
+| `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `claude mcp get bifrost` / `/mcp`; restart CC |
 | Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
 
