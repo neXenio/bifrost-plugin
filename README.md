@@ -47,6 +47,7 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_SKILLS_INJECT` | Set to `0` to disable the skill-library primer at session start | (enabled) |
 | `BIFROST_REFRESH` | Set to `0` to disable the background cache refresh entirely (no session-start-initiated network traffic) | (enabled) |
 | `BIFROST_REFRESH_INTERVAL_MS` | Minimum interval between background gateway refreshes | `3600000` (1 hour) |
+| `BIFROST_ALLOW_HTTP` | Set to `1` to let hooks contact a plain-HTTP gateway on a non-loopback host (legacy private-network deployments — the key crosses the wire unencrypted) | (off — HTTPS or loopback only) |
 | `BIFROST_KEYAPP_URL` | SSO keyapp URL for the browser provisioning flow — used only when you explicitly run `/bifrost-setup` | (unset — SSO flow unavailable) |
 
 Injected memory/KB sizing is adaptive, not a flat fact count — `hooks/refresh.cjs`

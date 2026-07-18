@@ -27,6 +27,9 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "test": "node --test test/compat.test.cjs"
+  },
   "files": [
     ".claude-plugin/",
     "bin/",

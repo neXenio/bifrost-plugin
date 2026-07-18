@@ -10,6 +10,30 @@ Remediation release: removes every hook side effect that organization plugin
 review flags, so the plugin can pass marketplace import screening. Auth is
 unchanged (`x-bf-vk` header, `BIFROST_URL`/`BIFROST_VK` env).
 
+### Backward compatibility
+
+Pinned by the contract tests in `test/compat.test.cjs` (`npm test`):
+
+- **Gateway-side clients are untouched.** Nothing in this release changes the
+  gateway; clients using the gateway's OpenAI-compatible endpoint (or any
+  other route) with existing `vk_…` keys are unaffected.
+- **Plugin wire format is unchanged**: same server name (`bifrost`), same
+  transport (`http`), same `${BIFROST_URL}`/`${BIFROST_VK}` templates, same
+  `x-bf-vk` auth header. `.mcp.json` is byte-identical to v1.1.0.
+- **Hook surface unchanged**: still exactly `SessionStart` +
+  `UserPromptSubmit`; all existing injection switches
+  (`BIFROST_MEMORY_INJECT`, `BIFROST_SKILLS_INJECT`, `BIFROST_KB_INJECT`)
+  and sizing knobs keep working; pre-1.1.0 plain-string cache files still
+  render.
+- **Installer flags unchanged**: `--key`, `--dry-run`, `--help`. New
+  requirement: `BIFROST_URL` must be set (it errors loudly instead of writing
+  a template to a dead file).
+- **One deliberate tightening**: hooks no longer send the key over cleartext
+  HTTP to non-loopback hosts. Legacy private-network deployments on plain
+  HTTP must set `BIFROST_ALLOW_HTTP=1` to restore the old behavior.
+- Setting the removed `BIFROST_DEV_SYNC` / `BIFROST_AUTOSETUP` vars is now a
+  harmless no-op.
+
 ### Changed
 
 - **SessionStart hook no longer has side effects beyond its own cache.** It
