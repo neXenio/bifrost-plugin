@@ -6,19 +6,31 @@
 //   2. Emit a skill-library primer + a recalled-memory header, both read from a
 //      per-project cache (instant). First session has no cache → those sections
 //      are omitted but the cache gets seeded for next time.
-//   3. Spawn a detached background worker (refresh.cjs) that talks to the gateway
-//      and refreshes the cache. It outlives this hook and never delays startup.
+//   3. Emit the admin/user policy from the signed plugin-config bundle (also cached;
+//      the cached copy was Ed25519-verified before it was written).
+//   4. Spawn a detached background worker (refresh.cjs) that talks to the gateway
+//      and refreshes both caches. It outlives this hook and never delays startup.
 //
 // Disable memory/skills/kb headers with BIFROST_MEMORY_INJECT=0 /
-// BIFROST_SKILLS_INJECT=0 / BIFROST_KB_INJECT=0.
+// BIFROST_SKILLS_INJECT=0 / BIFROST_KB_INJECT=0 — unless an administrator has locked
+// the corresponding field in the signed config, in which case the server value wins.
+// Disable the signed-config path entirely with BIFROST_PLUGIN_CONFIG=0.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const gw = require('./lib/gateway.cjs');
+const pc = require('./lib/plugin-config.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Signed admin/user policy from keyapp, read from the local cache (zero network — the
+// cached bundle was Ed25519-verified before it was ever written). refresh.cjs re-fetches
+// it in the detached background. Null when unconfigured, disabled
+// (BIFROST_PLUGIN_CONFIG=0), or not yet fetched. Hook toggles below resolve through
+// pc.hookFlag so an admin-locked field beats the local env var.
+const HOOK_ID = 'session-start';
 
 function emitContext() {
   try {
@@ -50,8 +62,8 @@ function readCache(file) {
   return null;
 }
 
-function emitSkills(cache) {
-  if (process.env.BIFROST_SKILLS_INJECT === '0') return;
+function emitSkills(cache, cfg) {
+  if (!pc.hookFlag(cfg, HOOK_ID, 'skillsInject', 'BIFROST_SKILLS_INJECT', true)) return;
   const s = cache && cache.skills;
   if (!s || !s.server) return;
   const call = s.mode === 'flat'
@@ -85,8 +97,8 @@ function factText(f) {
   return (f && typeof f.content === 'string') ? f.content : '';
 }
 
-function emitMemory(cache) {
-  if (process.env.BIFROST_MEMORY_INJECT === '0') return;
+function emitMemory(cache, cfg) {
+  if (!pc.hookFlag(cfg, HOOK_ID, 'memoryInject', 'BIFROST_MEMORY_INJECT', true)) return;
   const m = cache && cache.memory;
   const facts = m && Array.isArray(m.facts) ? m.facts : [];
   if (!facts.length) return;
@@ -104,8 +116,8 @@ function emitMemory(cache) {
   process.stdout.write(lines.join('\n'));
 }
 
-function emitKb(cache) {
-  if (process.env.BIFROST_KB_INJECT === '0') return;
+function emitKb(cache, cfg) {
+  if (!pc.hookFlag(cfg, HOOK_ID, 'kbInject', 'BIFROST_KB_INJECT', true)) return;
   const k = cache && cache.kb;
   const facts = k && Array.isArray(k.facts) ? k.facts : [];
   if (!facts.length) return;
@@ -121,6 +133,48 @@ function emitKb(cache) {
   );
   lines.push('');
   process.stdout.write(lines.join('\n'));
+}
+
+// Tri-state skill/tool policy from the signed bundle. `off` must actually suppress the
+// skill/tool for this user; `always_on` is not user-disableable; `available` is the
+// default and emits nothing.
+//
+// Scope note, deliberately: a SessionStart hook cannot unregister a gateway-side MCP
+// tool — bifrost already enforces `off` server-side by omitting it from the VK's
+// tools_to_execute (keyapp/lib/policy.js:materializeMcpConfigs). What this hook adds is
+// the CONTEXT-level half: the model is told, in-band, which skills/tools are off-limits
+// and which always apply. Both halves are driven by the same signed bundle, so they
+// cannot disagree.
+function emitPolicy(cfg) {
+  if (!cfg) return;
+  const { off, alwaysOn } = pc.partitionSkills(cfg);
+  const toolsOff = pc.offTools(cfg);
+  if (!off.length && !alwaysOn.length && !toolsOff.length) return; // all-default: stay silent
+
+  const lines = ['', '## Bifrost policy — administrator configuration', ''];
+  if (alwaysOn.length) {
+    lines.push(`**Always on** — apply these without being asked: ${alwaysOn.join(', ')}.`);
+    lines.push('');
+  }
+  if (off.length) {
+    lines.push(`**Disabled skills** — do NOT load or use these: ${off.join(', ')}.`);
+    lines.push('');
+  }
+  if (toolsOff.length) {
+    lines.push(`**Disabled tools** — do NOT call these: ${toolsOff.join(', ')}.`);
+    lines.push('');
+  }
+  process.stdout.write(lines.join('\n'));
+}
+
+// Surface a refusal recorded by the detached refresh worker (which has no stdout of its
+// own): plugin too old for the gateway, unannounced signing-key rotation, bad signature.
+// These are exactly the cases where we applied NOTHING and the user needs to know why.
+function emitConfigNotice() {
+  const { keyappUrl, enabled } = pc.env();
+  if (!enabled || !keyappUrl) return;
+  const n = pc.readNotice(keyappUrl);
+  if (n && n.message) process.stdout.write(`\n⚠️ ${n.message}\n`);
 }
 
 const SETUP_RESULT = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-setup-result.json');
@@ -192,9 +246,14 @@ function maybeSelfHealDevCache() {
 }
 
 // Fire-and-forget background refresh — detached + unref so it never blocks.
+// refresh.cjs does two independent jobs: the inject cache (needs BIFROST_URL) and the
+// signed plugin-config (needs BIFROST_KEYAPP_URL). Either one being configured is reason
+// enough to spawn it; the worker skips whichever half it lacks env for.
 function spawnRefresh(file) {
   const { url, vk } = gw.env();
-  if (!url || !vk) return;
+  const cfgEnv = pc.env();
+  const wantsConfig = cfgEnv.enabled && cfgEnv.keyappUrl && cfgEnv.vk;
+  if (!(url && vk) && !wantsConfig) return;
   try {
     spawn(
       process.execPath,
@@ -208,11 +267,17 @@ function main() {
   try {
     emitContext();
     try { maybeAutoSetup(); } catch (_) {}
+    // Verified-at-write-time config, straight off disk. No network, so a slow or dead
+    // gateway can never delay or break session start — we just run on the last good config.
+    let cfg = null;
+    try { cfg = pc.loadCached(); } catch (_) {}
     const file = cacheFile();
     const cache = readCache(file);
-    try { emitSkills(cache); } catch (_) {}
-    try { emitMemory(cache); } catch (_) {}
-    try { emitKb(cache); } catch (_) {}
+    try { emitPolicy(cfg); } catch (_) {}
+    try { emitSkills(cache, cfg); } catch (_) {}
+    try { emitMemory(cache, cfg); } catch (_) {}
+    try { emitKb(cache, cfg); } catch (_) {}
+    try { emitConfigNotice(); } catch (_) {}
     spawnRefresh(file);
     try { maybeSelfHealDevCache(); } catch (_) {}
   } catch (_) { /* silent-fail — never block session start */ }

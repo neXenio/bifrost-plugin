@@ -4,6 +4,53 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Signed plugin-config delivery (client half).** keyapp has been serving a
+  signed, content-addressed plugin-config since v2, but the plugin never
+  fetched it — admin policy and per-user opt-ins affected nothing. New
+  `hooks/lib/plugin-config.cjs` (Node core only, no deps) closes the loop:
+  fetches `/plugin-config/manifest.json` with the `x-bf-vk` header, verifies
+  the Ed25519 signature over the canonical manifest payload, hash-checks the
+  content-addressed bundle against the signed `sha256`, and caches it by
+  `configVersion` + `sha256`.
+- **Tri-state skill/tool policy is now applied.** `off` skills and tools are
+  surfaced to the model as off-limits, `always_on` as mandatory; `available`
+  is the default and emits nothing. The bundle is already the effective
+  per-user config (keyapp deep-merges admin policy with the user's non-locked
+  overrides server-side), so the plugin does not re-merge it.
+- **Admin field locks.** The `BIFROST_SKILLS_INJECT` / `BIFROST_MEMORY_INJECT` /
+  `BIFROST_KB_INJECT` toggles now resolve through the signed config: a field an
+  administrator has locked wins over the local environment variable; an unlocked
+  field still yields to it.
+- `BIFROST_PLUGIN_CONFIG=0` kill switch disables the entire signed-config path.
+  `BIFROST_PLUGIN_CONFIG_TTL_MS` (default 15min) caps how often the manifest is
+  re-checked.
+
+### Security
+
+- **Fails closed.** An absent, tampered, or mismatched signature — or a bundle
+  whose sha256 does not match the signed manifest — means nothing from the
+  server is applied on that pass. The plugin falls back to the last
+  cached-and-previously-verified config, or to no config at all. A bundle is
+  only ever written to cache *after* both checks pass, so the cache is
+  verified by construction.
+- **Signing key pinned on first use (TOFU).** A key rotation is only honoured
+  when `signingKeyId` changes. A gateway that silently swaps its key under the
+  same `signingKeyId` is refused loudly rather than trusted.
+- **`minBootstrapVersion` / `schemaVersion` gates.** If the gateway requires a
+  newer plugin than this one, the config is refused cleanly with an upgrade
+  message — never half-applied.
+
+### Changed
+
+- Session start loads the config from cache only (zero network, sub-ms) and
+  refreshes it in the existing detached `refresh.cjs` worker, so a slow or dead
+  gateway can never delay or break session start.
+- Plugin version bumped to **1.2.0** to satisfy the gateway's
+  `minBootstrapVersion: 1.2.0` — at 1.1.0 the plugin would have refused its own
+  config.
+
 ## [1.1.0] — 2026-07-09
 
 ### Changed

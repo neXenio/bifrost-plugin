@@ -46,8 +46,28 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_MEMORY_INJECT` | Set to `0` to disable the memory recall header at session start | (enabled) |
 | `BIFROST_SKILLS_INJECT` | Set to `0` to disable the skill-library primer at session start | (enabled) |
 | `BIFROST_DEV_SYNC` | Set to `0` to disable the dev-checkout plugin-cache self-heal (`scripts/sync-plugin-cache.sh`) | (enabled for git checkouts) |
-| `BIFROST_KEYAPP_URL` | SSO keyapp URL for one-command auto-onboarding (`hooks/auto-setup.cjs`) | (unset — auto-onboarding skipped) |
+| `BIFROST_KEYAPP_URL` | SSO keyapp URL — used for one-command auto-onboarding (`hooks/auto-setup.cjs`) and for signed plugin-config delivery | (unset — both skipped) |
 | `BIFROST_AUTOSETUP` | Set to `0` to disable the one-command auto-onboarding flow | (enabled when `BIFROST_KEYAPP_URL` is set) |
+| `BIFROST_PLUGIN_CONFIG` | Set to `0` to disable signed plugin-config delivery entirely (kill switch) | (enabled when `BIFROST_KEYAPP_URL` + `BIFROST_VK` are set) |
+| `BIFROST_PLUGIN_CONFIG_TTL_MS` | How long a fetched plugin-config stays fresh before the manifest is re-checked | `900000` (15 min) |
+
+### Signed plugin-config
+
+When `BIFROST_KEYAPP_URL` and `BIFROST_VK` are set, the plugin fetches an
+Ed25519-signed, content-addressed config bundle from keyapp
+(`hooks/lib/plugin-config.cjs`). The bundle carries the administrator's hook
+config plus a tri-state (`always_on` / `available` / `off`) policy for skills and
+MCP tools, already merged with your own non-locked opt-ins on the server.
+
+- Session start reads it **from cache only** — zero network, so a slow or dead
+  gateway never delays or breaks a session. A detached worker refreshes it.
+- It **fails closed**: a bad signature, a bundle whose `sha256` does not match the
+  signed manifest, or a gateway demanding a newer plugin means *nothing* from the
+  server is applied — the last verified config (or none) stays in effect.
+- The signing key is **pinned on first use**. Rotations are only honoured when
+  `signingKeyId` changes; a silent key swap is refused and reported.
+- Fields an administrator has **locked** override the corresponding environment
+  variable above. Unlocked fields still yield to your local setting.
 
 Injected memory/KB sizing is adaptive, not a flat fact count — `hooks/refresh.cjs`
 fetches a wider candidate pool from `memory_search`, then keeps the most similar

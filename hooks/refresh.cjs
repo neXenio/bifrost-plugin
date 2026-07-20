@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
+const pc = require('./lib/plugin-config.cjs');
 
 const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency is free
 const DEFAULT_MAX_FACTS = 6;
@@ -166,6 +167,13 @@ async function searchFacts(cap, query, wing) {
 async function main() {
   const cacheFile = process.argv[2];
   const query = process.argv[3] || 'recent decisions gotchas conventions';
+
+  // Signed plugin-config refresh. Independent of the inject cache below (different
+  // endpoint, different env), so it runs first and unconditionally — a gateway with
+  // BIFROST_KEYAPP_URL but no BIFROST_URL still gets its policy refreshed. Fails closed
+  // internally: a bad signature/hash leaves the last verified cache untouched.
+  try { await pc.refreshAndRecord({}); } catch (_) {}
+
   if (!cacheFile) return;
 
   const { url, vk } = gw.env();

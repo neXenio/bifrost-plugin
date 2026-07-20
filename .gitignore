@@ -34,3 +34,4 @@ Thumbs.db
 
 # Internal handover / working docs — not part of the shipped plugin
 HANDOVER-*.md
+temp/
