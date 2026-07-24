@@ -12,7 +12,7 @@
       "name": "bifrost-plugin",
       "source": "./",
       "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skills, agent-driven memory, onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
-      "defaultEnabled": false
+      "defaultEnabled": true
     }
   ]
 }
