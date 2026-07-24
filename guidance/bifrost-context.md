@@ -9,6 +9,11 @@ the tools, skill library, and memory your gateway exposes.
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
+> **Auth modes:** this session (Claude Code) authenticates with the virtual-key
+> header above. Claude Desktop instead connects to the same gateway via OAuth
+> (company Keycloak login — no key needed); its setup lives in the Desktop
+> connector UI, not in `.mcp.json`. Same gateway, same tools either way.
+
 ## Two ways tools are exposed — this matters
 
 Run `/mcp` to see what loaded. A gateway exposes upstream servers in one of two

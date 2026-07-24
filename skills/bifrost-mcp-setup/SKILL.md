@@ -1,6 +1,6 @@
 ---
 name: bifrost-mcp-setup
-description: "Manually wire a Bifrost MCP server into Claude Code when the automated installer can't run. Triggers on 'manually add bifrost mcp', 'installer failed', 'add x-bf-vk header', 'manual bifrost setup', 'register bifrost mcp'."
+description: "Manually wire a Bifrost MCP server into Claude Code (mcp.json) or Claude Desktop (OAuth connector or local proxy) when the automated installer can't run. Triggers on 'manually add bifrost mcp', 'edit mcp.json for bifrost', 'installer failed', 'add x-bf-vk header', 'manual bifrost setup', 'mcp.json bifrost', 'bifrost in claude desktop', 'claude_desktop_config'."
 ---
 
 # Manual Bifrost MCP Setup
@@ -59,10 +59,52 @@ results, the gateway is live.
 claude mcp remove --scope user bifrost
 ```
 
+## Claude Desktop
+
+Desktop does **not** read `~/.claude/mcp.json` and has no header field for a
+virtual key — it connects via OAuth (preferred) or a local proxy (fallback).
+
+### Preferred — OAuth connector
+
+1. **Settings → Connectors → Add custom connector**, URL:
+   `https://<stable-gateway-host>/mcp` (the stable domain — ephemeral tunnel
+   URLs won't work with OAuth).
+2. Connect → log in at the company Keycloak → consent. No key or config file needed.
+3. If the connector cannot self-register (`mcp_registration_failed` despite a
+   correct URL), enter the operator-provided client ID under
+   **Advanced settings → OAuth Client ID**.
+
+### Fallback — local `mcp-remote` proxy
+
+Only if the OAuth bridge is not deployed. Requires Node. Edit
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "bifrost": {
+      "command": "npx",
+      "args": [
+        "mcp-remote", "https://<stable-gateway-host>/mcp",
+        "--transport", "http-only",
+        "--header", "x-bf-vk:${BIFROST_VK}"
+      ],
+      "env": { "BIFROST_VK": "vk_<your-key>" }
+    }
+  }
+}
+```
+
+No spaces around `:` in the `--header` arg. This file then contains your key —
+treat it as a secret (`chmod 600` on macOS/Linux) and never commit it.
+Restart Claude Desktop afterwards.
+
 ## Troubleshooting
 
 - **401 from bifrost** → `BIFROST_VK` is wrong or not exported. Re-check your shell env.
 - **Tool not found after restart** → `claude mcp get bifrost` should show `"type": "http"` (not `"sse"`); re-run Step 2 if the entry is missing.
 - **Gateway timeout** → gateway may be offline or `BIFROST_URL` is wrong. Contact the gateway operator.
+- **Desktop OAuth errors** (`mcp_registration_failed`, `Invalid redirect URI`, `no_virtual_key`) → run `/bifrost-debug` step 7.
 
 For full diagnosis: `/bifrost-debug`.

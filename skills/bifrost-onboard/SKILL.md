@@ -5,7 +5,8 @@ description: "Onboard to a Bifrost MCP gateway in Claude Code — run the one-co
 
 # Bifrost Onboarding
 
-Walk through full Bifrost setup in Claude Code. Focus exclusively on CC paths.
+Walk through full Bifrost setup in Claude Code (steps 1–5), then optionally
+Claude Desktop (step 6).
 
 ## Step 1 — Get your gateway URL and virtual key
 
@@ -70,6 +71,29 @@ already present (idempotent).
 grep -q "## Skill Discovery" ~/.claude/CLAUDE.md \
   || cat "${CLAUDE_PLUGIN_ROOT}/guidance/AGENTS-skill-stanza.md" >> ~/.claude/CLAUDE.md
 ```
+
+## Step 6 — Claude Desktop (optional)
+
+Ask whether the user also wants the gateway in Claude Desktop. If yes:
+
+**Preferred — zero-config OAuth Connect:**
+
+1. Claude Desktop → **Settings → Connectors → Add custom connector**.
+2. Paste the gateway URL: `https://<stable-gateway-host>/mcp` (must be the
+   stable domain the operator gave you — not an ephemeral tunnel URL).
+3. Click Connect → a browser opens the company Keycloak login → sign in and
+   consent. Desktop registers itself automatically (DCR + PKCE).
+4. Verify: the connector shows connected and gateway tools appear in Desktop.
+
+If login succeeds but requests fail with `no_virtual_key`, the operator has
+not mapped your identity to a virtual key yet — ask them to add you.
+If the connector cannot register a client, enter the operator-provided client
+ID under **Advanced settings → OAuth Client ID**.
+
+**Fallback — local proxy** (only if the OAuth bridge is not deployed): add an
+`mcp-remote` entry to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(see README → Authentication modes for the exact snippet; requires Node, and the
+file then holds your VK — treat it as a secret).
 
 ## Troubleshooting
 

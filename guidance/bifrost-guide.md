@@ -67,6 +67,17 @@ claude mcp add --scope user --transport http bifrost \
 when the plugin is enabled.) Set `BIFROST_URL` and `BIFROST_VK` in your shell,
 restart Claude Code, and confirm the `bifrost` server appears in `/mcp`.
 
+## Claude Desktop
+
+Claude Desktop does not use `.mcp.json` or the `x-bf-vk` header. It connects to
+the same gateway via **OAuth**: Settings → Connectors → Add custom connector →
+paste the stable gateway URL (`https://<stable-gateway-host>/mcp`) → log in with
+your company Keycloak account. The gateway's OAuth bridge maps your identity to
+your personal virtual key, so governance (budgets, rate limits, tool groups)
+applies exactly as on the CLI. Fallback for environments without the bridge: a
+local `mcp-remote` proxy entry in `claude_desktop_config.json` (see README →
+Authentication modes).
+
 ## Hooks
 
 The plugin registers two Claude Code hooks:
@@ -107,6 +118,8 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 | 401 / 403 from bifrost | `BIFROST_VK` missing or wrong | Re-run setup or set `export BIFROST_VK=vk_<your-key>` |
 | No skills found | bifrost MCP not loaded, or no skill server | Check `claude mcp get bifrost` / `/mcp`; run `/bifrost-mcp-setup` |
 | Hook not firing | Plugin not installed/enabled | Re-install / re-enable via `/plugin`; restart CC (hooks ship inside the plugin, not `settings.json`) |
+| Desktop: `mcp_registration_failed` | Ephemeral/old URL, OAuth bridge down, or DCR disabled | Use the stable gateway URL; `/bifrost-debug` step 7 |
+| Desktop: `no_virtual_key` after login | Identity not in the bridge's VK map | Ask the gateway operator to map your email to a virtual key |
 
 ## Gateway routing reference
 
