@@ -6,19 +6,22 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [1.3.0] — 2026-07-24
 
-Combined release folding three lines of work: the signed plugin-config client
-(Ed25519), removal of every hook side effect that organization marketplace
-review flags, and the OAuth 2.1 bridge for Claude Desktop. Auth for existing
+Combined release folding two lines of work: the signed plugin-config client
+(Ed25519) and removal of every hook side effect that organization marketplace
+review flags, plus Claude Desktop OAuth connect guidance. Auth for existing
 clients is unchanged (`x-bf-vk` header, `BIFROST_URL`/`BIFROST_VK` env).
 
 ### Added
 
-- **Claude Desktop OAuth support** via a standalone resource-server bridge
-  (`bridge/`): RFC 9728 protected-resource metadata, Keycloak JWT validation
-  (issuer + RFC 8707 audience binding + signature + expiry), and per-user
-  virtual-key mapping synced from Bifrost's SSO user table
-  (`bridge/src/sync-vk-map.mjs`). The existing `x-bf-vk` header path used by the
-  Claude Code CLI is untouched; Desktop and CLI clients coexist on one gateway.
+- **Claude Desktop OAuth connect support (docs).** Desktop connects to the
+  gateway's OAuth 2.1 MCP endpoint (RFC 9728 protected-resource metadata +
+  Keycloak/idms bearer validation, served gateway-side) with a company SSO
+  login — no key needed. The plugin ships the connect guidance (README
+  *Authentication modes*, `bifrost-mcp-setup` Claude Desktop section,
+  `bifrost-debug` step 7) and a local `mcp-remote` + VK fallback. The
+  `x-bf-vk` header path used by the Claude Code CLI is untouched; Desktop and
+  CLI clients coexist on one gateway. (The OAuth resource server lives in the
+  gateway deployment, not this plugin.)
 - **Signed plugin-config delivery (client half).** keyapp has been serving a
   signed, content-addressed plugin-config since v2, but the plugin never
   fetched it — admin policy and per-user opt-ins affected nothing. New
@@ -54,14 +57,10 @@ clients is unchanged (`x-bf-vk` header, `BIFROST_URL`/`BIFROST_VK` env).
 - **`minBootstrapVersion` / `schemaVersion` gates.** If the gateway requires a
   newer plugin than this one, the config is refused cleanly with an upgrade
   message — never half-applied.
-- **OAuth bridge enforces audience binding (RFC 8707).** Bearer tokens minted
-  for another service are rejected, not passed through; the inbound Bearer is
-  stripped before proxying and replaced with the user's mapped virtual key.
-  The `email` claim is only trusted when `email_verified` is true (otherwise
-  the lookup falls back to `sub`), so an unverified address cannot claim another
-  user's key. Authenticated-but-unmapped users are denied with no shared-key
-  fallback. Bridge logs redact `authorization` / `x-bf-vk` / `x-api-key`, and
-  the sync job's admin token never sits in the request path.
+- **Desktop OAuth is validated gateway-side.** The gateway's OAuth MCP endpoint
+  enforces issuer + audience (RFC 8707) + signature + expiry on the bearer token
+  and maps the authenticated identity to a per-user virtual key
+  (deny-by-default for unmapped users). This plugin holds no token-handling code.
 - **No hook sends the key over cleartext HTTP** to non-loopback hosts
   (`hooks/lib/gateway.cjs`); `BIFROST_ALLOW_HTTP=1` restores the legacy
   private-network behavior deliberately.

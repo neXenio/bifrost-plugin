@@ -1,6 +1,0 @@
-{
-  "users": {
-    "alice@luca-app.de": "vk_<alice-virtual-key>",
-    "<keycloak-sub-uuid>": "vk_<bob-virtual-key>"
-  }
-}

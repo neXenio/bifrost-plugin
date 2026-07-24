@@ -31,15 +31,15 @@ The same gateway supports three ways to connect, depending on the client:
 | Client | Auth | Setup |
 |---|---|---|
 | **Claude Desktop (recommended)** | OAuth 2.1 via the company Keycloak | Settings → Connectors → Add custom connector → paste `https://bifrost.luca-app.de/mcp` → log in with your company account. Zero further config. |
-| **Claude Desktop (fallback)** | Local `mcp-remote` proxy injecting your VK | See snippet below — only needed if the OAuth bridge is unavailable |
+| **Claude Desktop (fallback)** | Local `mcp-remote` proxy injecting your VK | See snippet below — only needed if the gateway's OAuth endpoint is unavailable |
 | **Claude Code CLI** | `x-bf-vk` header from `${BIFROST_VK}` | Unchanged — everything in [Install](#install) below |
 
 **Desktop OAuth notes:**
 
-- The gateway runs behind an [OAuth bridge](./bridge/README.md) that validates
-  Keycloak tokens and maps your identity to your personal virtual key, so
-  budgets/rate-limits still apply. If you can log in but get
-  `no_virtual_key`, ask the gateway operator to add you to the VK map.
+- The gateway exposes an OAuth 2.1 MCP endpoint (RFC 9728 metadata + Keycloak
+  token validation, served gateway-side) that maps your identity to your
+  personal virtual key, so budgets/rate-limits still apply. If you can log in
+  but get `no_virtual_key`, ask the gateway operator to add you to the VK map.
 - If the connector UI reports it cannot register a client, use its
   **Advanced settings → OAuth Client ID** field with the client ID your
   operator provides (pre-registered fallback).
