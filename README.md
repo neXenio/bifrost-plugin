@@ -45,9 +45,10 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_KB_INJECT` | Set to `0` to disable the KB recall header at session start | (enabled) |
 | `BIFROST_MEMORY_INJECT` | Set to `0` to disable the memory recall header at session start | (enabled) |
 | `BIFROST_SKILLS_INJECT` | Set to `0` to disable the skill-library primer at session start | (enabled) |
-| `BIFROST_DEV_SYNC` | Set to `0` to disable the dev-checkout plugin-cache self-heal (`scripts/sync-plugin-cache.sh`) | (enabled for git checkouts) |
-| `BIFROST_KEYAPP_URL` | SSO keyapp URL — used for one-command auto-onboarding (`hooks/auto-setup.cjs`) and for signed plugin-config delivery | (unset — both skipped) |
-| `BIFROST_AUTOSETUP` | Set to `0` to disable the one-command auto-onboarding flow | (enabled when `BIFROST_KEYAPP_URL` is set) |
+| `BIFROST_REFRESH` | Set to `0` to disable the background cache refresh entirely (no session-start-initiated network traffic) | (enabled) |
+| `BIFROST_REFRESH_INTERVAL_MS` | Minimum interval between background gateway refreshes | `3600000` (1 hour) |
+| `BIFROST_ALLOW_HTTP` | Set to `1` to let hooks contact a plain-HTTP gateway on a non-loopback host (legacy private-network deployments — the key crosses the wire unencrypted) | (off — HTTPS or loopback only) |
+| `BIFROST_KEYAPP_URL` | SSO keyapp URL — powers the explicit `/bifrost-setup` browser provisioning flow and signed plugin-config delivery | (unset — both skipped) |
 | `BIFROST_PLUGIN_CONFIG` | Set to `0` to disable signed plugin-config delivery entirely (kill switch) | (enabled when `BIFROST_KEYAPP_URL` + `BIFROST_VK` are set) |
 | `BIFROST_PLUGIN_CONFIG_TTL_MS` | How long a fetched plugin-config stays fresh before the manifest is re-checked | `900000` (15 min) |
 
@@ -167,13 +168,15 @@ the repository marketplace. See [Bifrost Skills Repository docs](https://docs.ge
 ### Fallback — manual installer
 
 If you can't use the marketplace (air-gapped, etc.), clone and run the installer,
-which writes the entry into `~/.claude/mcp.json` directly:
+a thin wrapper that registers the server through Claude Code's own CLI
+(`claude mcp add --scope user`) — it never edits config files directly:
 
 ```bash
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://<your-gateway-host>/mcp
 node bin/install.js --key vk_<your-key>   # then persist env vars as above
+node bin/install.js --dry-run             # prints the claude mcp add command instead
 ```
 
 > **macOS:** Prefer `~/.claude/settings.json` (see above) over shell profile alone.
@@ -200,9 +203,10 @@ node bin/install.js --key vk_<your-key>   # then persist env vars as above
 
 ---
 
-## What gets written to mcp.json
+## How the MCP server gets registered
 
-The plugin writes one entry to `~/.claude/mcp.json`:
+Marketplace installs need no registration step at all: the plugin ships this
+`.mcp.json`, which Claude Code auto-discovers when the plugin is enabled:
 
 ```json
 {
@@ -216,9 +220,12 @@ The plugin writes one entry to `~/.claude/mcp.json`:
 }
 ```
 
-`${BIFROST_URL}` and `${BIFROST_VK}` are resolved at runtime from Claude Code's
-environment (`~/.claude/settings.json` `env` key and/or your shell). The key is
-never stored in any file.
+The manual fallback (`bin/install.js`, or `/bifrost-setup`) registers the same
+server at user scope via `claude mcp add --scope user` — the plugin never edits
+Claude Code config files itself. `${BIFROST_URL}` and `${BIFROST_VK}` are
+resolved at runtime from Claude Code's environment (`~/.claude/settings.json`
+`env` key and/or your shell). Without `--key`, the key is never stored in any
+file.
 
 ---
 
@@ -253,7 +260,7 @@ Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` dia
 
 - `BIFROST_VK` is always `${BIFROST_VK}` in files — never a literal key value.
 - `.gitignore` blocks `.env`, `*.key`, and `*_VK=*` patterns.
-- The installer prints the `export` reminder to the terminal; it does not write the key anywhere.
+- The installer registers the server via `claude mcp add`; without `--key` it stores the `${BIFROST_VK}` template and the key never touches disk.
 - Run `git grep -nE 'vk_[A-Za-z0-9]'` to confirm the repo is clean before any push.
 
 ---
@@ -264,27 +271,18 @@ Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` dia
 SessionStart      →  session-start.cjs  →  prints guidance/bifrost-context.md (~400 tokens)
 UserPromptSubmit  →  prompt-submit.cjs  →  skill-discovery hint for task-verb prompts
 
-~/.claude/mcp.json  →  bifrost MCP server  →  mcp__bifrost__<server>-<tool> (skills, memory, …)
+.mcp.json (shipped)  →  bifrost MCP server  →  mcp__bifrost__<server>-<tool> (skills, memory, …)
 
 Memory: agent calls mcp__bifrost__<memory-server>-search before tasks,
         mcp__bifrost__<memory-server>-store after significant work.
 ```
 
 All hooks silent-fail: any error exits 0 silently so they never block a prompt.
-See [hooks/HOOK-VERIFICATION.md](./hooks/HOOK-VERIFICATION.md) for the wired
-events and hook conventions.
-
-### Development
-
-- `scripts/sync-plugin-cache.sh` — point the installed plugin cache at this
-  checkout's HEAD so a dev-from-checkout can iterate without a marketplace
-  reinstall. `session-start.cjs` re-runs it automatically (best-effort,
-  detached) whenever it detects it's running from a `.git` checkout;
-  disable with `BIFROST_DEV_SYNC=0`.
-- `scripts/settings-lint.sh` — scope-drift guard (see
-  [docs/settings-policy.md](./docs/settings-policy.md)): fails if a real
-  virtual key gets committed to the repo, or this checkout's local path leaks
-  into `~/.claude/mcp.json` / `~/.claude/settings.json`.
+Hooks write only to their own cache under `~/.cache/bifrost-plugin/` — they
+never touch Claude Code configuration, launch other programs, or open browsers.
+The background cache refresh contacts the gateway at most once per hour
+(`BIFROST_REFRESH=0` disables it), sending only the project directory basename
+plus a fixed recall phrase.
 
 ---
 
@@ -294,19 +292,13 @@ events and hook conventions.
 # 1. Remove / disable the plugin from Claude Code:
 #    /plugin   (then uninstall bifrost-plugin)   — or remove its dir under ~/.claude/plugins
 
-# 2. Remove the bifrost server entry from ~/.claude/mcp.json:
-node -e "
-const fs=require('fs'), os=require('os');
-const f=os.homedir()+'/.claude/mcp.json';
-try {
-  const c=JSON.parse(fs.readFileSync(f,'utf8'));
-  if (c.mcpServers) delete c.mcpServers.bifrost;
-  fs.writeFileSync(f, JSON.stringify(c,null,2)+'\n');
-  console.log('removed bifrost from', f);
-} catch (e) { console.error('skip:', e.message); }
-"
+# 2. If you registered the server manually (installer or /bifrost-setup):
+claude mcp remove --scope user bifrost
 
 # 3. Remove BIFROST_* from ~/.claude/settings.json env and ~/.zshrc / ~/.bashrc if you added them.
+
+# 4. Optionally clear the plugin cache:
+rm -rf ~/.cache/bifrost-plugin
 ```
 
 ---

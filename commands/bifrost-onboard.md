@@ -1,3 +1,7 @@
+---
+description: Onboard to a Bifrost MCP gateway — register the server, verify the connection, confirm memory and skill discovery.
+---
+
 # /bifrost-onboard
 
 Onboard to a Bifrost MCP gateway in Claude Code: run the installer, verify the

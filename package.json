@@ -1,6 +1,6 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Bifrost MCP gateway plugin for Claude Code: memory auto-injection, skill discovery, one-command onboarding.",
   "main": "bin/install.js",
   "bin": {
@@ -31,6 +31,9 @@
   "engines": {
     "node": ">=18"
   },
+  "scripts": {
+    "test": "node --test test/compat.test.cjs"
+  },
   "files": [
     ".claude-plugin/",
     "bin/",
@@ -38,8 +41,6 @@
     "hooks/",
     "skills/",
     "guidance/",
-    "scripts/",
-    "docs/",
     ".mcp.json",
     "README.md",
     "INSTALL.md",

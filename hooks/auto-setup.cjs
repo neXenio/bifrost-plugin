@@ -1,12 +1,14 @@
 'use strict';
-// Detached auto-provision worker. Spawned by the SessionStart hook the FIRST time
-// a session starts with no bifrost key configured. Fully best-effort:
+// Auto-provision worker. Run EXPLICITLY by the user via the /bifrost-setup
+// command — it is never spawned automatically (no hook launches browsers or
+// writes config on the user's behalf). Fully best-effort:
 //   1. Start a loopback listener on 127.0.0.1:<ephemeral> with a single-use nonce.
 //   2. Open the SSO keyapp at KEYAPP_BASE?cb=http://127.0.0.1:<port>/cb?state=<nonce>.
 //      If the user already holds a valid SSO cookie the page resolves their key and
 //      303-redirects straight back to the loopback — no interaction at all.
 //   3. On callback, validate the nonce, then persist the MCP server with the key via
-//      `claude mcp add` (fallback: merge into ~/.claude.json).
+//      `claude mcp add --scope user` (no fallback: if the CLI is unreachable we
+//      report failure rather than guessing at config paths).
 //   4. Write a result marker so the SessionStart hook can surface a one-line warning
 //      next session if this failed. Never throws; always exits 0.
 //

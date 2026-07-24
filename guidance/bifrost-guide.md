@@ -43,11 +43,11 @@ node bin/install.js --key vk_<your-key>
 ```
 
 The installer:
-1. Merges the bifrost MCP server into `~/.claude/mcp.json` (idempotent — safe to
-   run twice; backs up the existing file to `mcp.json.bak` and writes atomically).
-2. Prints an `export BIFROST_VK=…` line. It does NOT touch your shell profile —
-   you must paste that line into `~/.zshrc` (or `~/.bashrc`) yourself for the key
-   to persist.
+1. Registers the bifrost MCP server via `claude mcp add --scope user` (idempotent —
+   re-running replaces the same entry; it never edits config files directly).
+2. Without `--key`, stores the `${BIFROST_VK}` runtime template — you must set
+   `export BIFROST_VK=…` in `~/.zshrc` (or `~/.bashrc`) yourself for the key
+   to resolve.
 3. Tells you to restart CC, after which the gateway and skill-search tools are callable.
 
 To append the skill-discovery MUST-stanza to your `~/.claude/CLAUDE.md`, the
@@ -56,22 +56,16 @@ To append the skill-discovery MUST-stanza to your `~/.claude/CLAUDE.md`, the
 
 ## Manual MCP wiring (fallback)
 
-If the installer can't run, add this block to `~/.claude/mcp.json` by hand:
+If the installer can't run, register the server yourself with Claude Code's CLI:
 
-```json
-{
-  "mcpServers": {
-    "bifrost": {
-      "type": "http",
-      "url": "${BIFROST_URL}",
-      "headers": { "x-bf-vk": "${BIFROST_VK}" }
-    }
-  }
-}
+```bash
+claude mcp add --scope user --transport http bifrost \
+  "https://<your-gateway-host>/mcp" --header "x-bf-vk: ${BIFROST_VK}"
 ```
 
-Set `BIFROST_URL` and `BIFROST_VK` in your shell, restart Claude Code, and confirm
-the `bifrost` server appears in `/mcp`.
+(Plugin installs don't need this at all — the shipped `.mcp.json` self-wires
+when the plugin is enabled.) Set `BIFROST_URL` and `BIFROST_VK` in your shell,
+restart Claude Code, and confirm the `bifrost` server appears in `/mcp`.
 
 ## Hooks
 
@@ -111,7 +105,7 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | 401 / 403 from bifrost | `BIFROST_VK` missing or wrong | Re-run setup or set `export BIFROST_VK=vk_<your-key>` |
-| No skills found | bifrost MCP not loaded, or no skill server | Check `~/.claude/mcp.json`; run `/bifrost-mcp-setup` |
+| No skills found | bifrost MCP not loaded, or no skill server | Check `claude mcp get bifrost` / `/mcp`; run `/bifrost-mcp-setup` |
 | Hook not firing | Plugin not installed/enabled | Re-install / re-enable via `/plugin`; restart CC (hooks ship inside the plugin, not `settings.json`) |
 
 ## Gateway routing reference

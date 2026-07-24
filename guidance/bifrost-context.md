@@ -5,7 +5,7 @@ the tools, skill library, and memory your gateway exposes.
 
 | Item | Value |
 |------|-------|
-| MCP server | `bifrost` (from the plugin's `.mcp.json` or `~/.claude/mcp.json`) |
+| MCP server | `bifrost` (from the plugin's `.mcp.json`, or user-scope via `claude mcp add`) |
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 

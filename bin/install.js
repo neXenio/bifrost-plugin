@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 'use strict';
+// Fallback installer for setups that don't use the marketplace plugin path
+// (the plugin's own .mcp.json self-wires when the plugin is enabled, so most
+// users never need this). Registers the bifrost MCP server through Claude
+// Code's own CLI (`claude mcp add --scope user`) instead of editing any config
+// file directly — this plugin never writes to files under ~/.claude/.
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+const { execFileSync } = require('child_process');
 
 const BIFROST_SERVER_NAME = 'bifrost';
-// URL and VK are runtime templates — Claude Code resolves them from the shell env.
-const MCP_JSON_PATH = path.join(os.homedir(), '.claude', 'mcp.json');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -31,103 +32,24 @@ function parseArgs(argv) {
 function printHelp() {
   console.log([
     '',
-    'bifrost-plugin installer — idempotent Bifrost MCP setup for Claude Code',
+    'bifrost-plugin installer — registers the Bifrost MCP server via `claude mcp add`',
     '',
     'Usage:',
-    '  node bin/install.js [--key <vk_...>] [--dry-run]',
+    '  BIFROST_URL=https://<gateway>/mcp node bin/install.js [--key <vk_...>] [--dry-run]',
     '',
     'Options:',
-    '  --key <vk>   Your Bifrost VK (virtual key). Printed as an export',
-    '               reminder; never written into any file.',
-    '  --dry-run    Show what would change without writing anything.',
+    '  --key <vk>   Your Bifrost VK (virtual key). Stored in the server entry',
+    '               auth header. Without it, the ${BIFROST_VK} runtime template',
+    '               is used and the key stays only in your shell environment.',
+    '  --dry-run    Show the `claude mcp add` command without running it.',
     '  --help       Show this message.',
     '',
     'Effect:',
-    '  Merges the bifrost mcpServer entry into ~/.claude/mcp.json.',
-    '  Running twice leaves exactly one entry — second run is a no-op.',
+    '  Runs: claude mcp add --scope user --transport http bifrost <url> \\',
+    '          --header "x-bf-vk: <key>"',
+    '  Re-running replaces the same entry — safe to run multiple times.',
     '',
   ].join('\n'));
-}
-
-// ---------------------------------------------------------------------------
-// mcp.json helpers
-// ---------------------------------------------------------------------------
-
-function readMcpJson(filePath) {
-  if (!fs.existsSync(filePath)) {
-    return { mcpServers: {} };
-  }
-  const raw = fs.readFileSync(filePath, 'utf8');
-  if (!raw.trim()) {
-    // Empty file is safe to treat as a fresh config.
-    return { mcpServers: {} };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    // Malformed JSON — ABORT. Silently overwriting would destroy the user's
-    // existing MCP servers. Make them fix or remove the file deliberately.
-    console.error('[bifrost-plugin] ERROR: ' + filePath + ' is not valid JSON.');
-    console.error('  Parse error: ' + err.message);
-    console.error('  Refusing to overwrite it. Fix the JSON (or move it aside) and re-run.');
-    process.exit(1);
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    console.error('[bifrost-plugin] ERROR: ' + filePath + ' does not contain a JSON object.');
-    console.error('  Refusing to overwrite it. Fix or remove it and re-run.');
-    process.exit(1);
-  }
-  if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
-    parsed.mcpServers = {};
-  }
-  return parsed;
-}
-
-function writeMcpJson(filePath, data) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  // Back up any existing file before replacing it.
-  if (fs.existsSync(filePath)) {
-    try { fs.copyFileSync(filePath, filePath + '.bak'); } catch (_) { /* best-effort backup */ }
-  }
-  // Atomic write: write a sibling tmp file, then rename over the target so a
-  // crash mid-write can never leave a truncated mcp.json.
-  const tmpPath = filePath + '.tmp-' + process.pid;
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
-  fs.renameSync(tmpPath, filePath);
-}
-
-function buildBifrostEntry() {
-  return {
-    type: 'http',
-    url: '${BIFROST_URL}',
-    headers: { 'x-bf-vk': '${BIFROST_VK}' }
-  };
-}
-
-// Deep-equal via JSON round-trip (safe for plain config objects)
-function entriesEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-// ---------------------------------------------------------------------------
-// Key reminder (never written to disk)
-// ---------------------------------------------------------------------------
-
-function printKeyReminder(key) {
-  // Safety check: refuse to log anything that looks like a real secret token.
-  // The installer must never echo a key into a log that could be captured.
-  // We only print the export line — the shell does the assignment, not us.
-  console.log('');
-  console.log('Set your Bifrost VK (add to ~/.zshrc or ~/.bashrc for persistence):');
-  console.log('');
-  // Print the raw export line — the key value is supplied by the caller who
-  // already has it; this is equivalent to echoing it back for copy-paste.
-  console.log('  export BIFROST_VK=' + key);
-  console.log('');
 }
 
 // ---------------------------------------------------------------------------
@@ -142,52 +64,58 @@ function main() {
     process.exit(0);
   }
 
-  // --key: print export reminder, never write to disk
-  if (args.key) {
-    printKeyReminder(args.key);
+  const url = (process.env.BIFROST_URL || '').trim();
+  if (!url) {
+    console.error('[bifrost-plugin] ERROR: BIFROST_URL is not set.');
+    console.error('  export BIFROST_URL=https://<your-gateway-host>/mcp and re-run.');
+    process.exit(1);
   }
 
-  // Read current state
-  const mcpJson = readMcpJson(MCP_JSON_PATH);
-  const desiredEntry = buildBifrostEntry();
-  const existing = mcpJson.mcpServers[BIFROST_SERVER_NAME];
+  // Without --key the header keeps the runtime template, so the key itself is
+  // never persisted anywhere — it stays in the shell env as BIFROST_VK.
+  const headerValue = args.key ? args.key : '${BIFROST_VK}';
+  const cliArgs = [
+    'mcp', 'add', '--scope', 'user', '--transport', 'http',
+    BIFROST_SERVER_NAME, url, '--header', `x-bf-vk: ${headerValue}`,
+  ];
 
-  // Idempotency check
-  if (existing && entriesEqual(existing, desiredEntry)) {
-    console.log('[bifrost-plugin] Already configured — no changes made.');
-    console.log('  ' + MCP_JSON_PATH);
-    printNextSteps(false);
-    process.exit(0);
-  }
+  const shown = cliArgs
+    .map((a) => {
+      if (a !== `x-bf-vk: ${headerValue}`) return a;
+      return args.key ? '"x-bf-vk: <your-key>"' : '"x-bf-vk: ${BIFROST_VK}"';
+    })
+    .join(' ');
 
   if (args.dryRun) {
-    console.log('[bifrost-plugin] Dry run — would write to:');
-    console.log('  ' + MCP_JSON_PATH);
-    console.log('');
-    console.log('  mcpServers.' + BIFROST_SERVER_NAME + ' =', JSON.stringify(desiredEntry, null, 2));
+    console.log('[bifrost-plugin] Dry run — would execute:');
+    console.log('  claude ' + shown);
     process.exit(0);
   }
 
-  // Apply
-  mcpJson.mcpServers[BIFROST_SERVER_NAME] = desiredEntry;
-  writeMcpJson(MCP_JSON_PATH, mcpJson);
+  try {
+    execFileSync('claude', cliArgs, { stdio: 'inherit', timeout: 15000 });
+  } catch (err) {
+    console.error('[bifrost-plugin] ERROR: `claude mcp add` failed.');
+    console.error('  Is the Claude Code CLI on your PATH? You can run it yourself:');
+    console.error('  claude ' + shown);
+    process.exit(1);
+  }
 
-  console.log('[bifrost-plugin] Bifrost MCP server written to:');
-  console.log('  ' + MCP_JSON_PATH);
-  printNextSteps(true);
+  console.log('[bifrost-plugin] Bifrost MCP server registered (user scope).');
+  printNextSteps(!args.key);
   process.exit(0);
 }
 
-function printNextSteps(freshInstall) {
+function printNextSteps(needsEnvKey) {
   console.log('');
-  if (freshInstall) {
-    console.log('Next steps:');
-    console.log('  1. Set your VK (if not already):');
-    console.log('       export BIFROST_VK=<your-vk-key>');
+  console.log('Next steps:');
+  if (needsEnvKey) {
+    console.log('  1. Set your VK in your shell profile: export BIFROST_VK=<your-vk-key>');
     console.log('  2. Restart Claude Code');
-    console.log('  3. Verify: type "set up bifrost" or run /bifrost-setup');
+    console.log('  3. Verify: run /bifrost-setup');
   } else {
-    console.log('To verify the connection, type "set up bifrost" in Claude Code.');
+    console.log('  1. Restart Claude Code');
+    console.log('  2. Verify: run /bifrost-setup');
   }
   console.log('');
 }

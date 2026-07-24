@@ -23,8 +23,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/install.js" --key vk_<your-key>
 ```
 
 The installer:
-- Merges the bifrost MCP server into `~/.claude/mcp.json` (idempotent — safe to run twice; it backs up the existing file to `mcp.json.bak` and writes atomically).
-- Prints an `export BIFROST_VK=…` line. It does NOT modify your shell profile — you must paste that line into `~/.zshrc` (or `~/.bashrc`) yourself for the key to persist across sessions.
+- Registers the bifrost MCP server via `claude mcp add --scope user` (idempotent — re-running replaces the same entry; it never edits config files directly).
+- Without `--key`, stores the `${BIFROST_VK}` runtime template. It does NOT modify your shell profile — you must add `export BIFROST_VK=…` to `~/.zshrc` (or `~/.bashrc`) yourself for the key to persist across sessions.
 
 Or run the slash command from inside Claude Code (same installer):
 
