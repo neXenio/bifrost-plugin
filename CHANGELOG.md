@@ -4,6 +4,16 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-07-27
+
+### Changed
+
+- SessionStart now emits one migration line when `BIFROST_URL` uses
+  `bifrostphil108.share.zrok.io`, directing that client to
+  `https://bifrost.culture4.life/mcp`. It does not rewrite user configuration
+  and stays silent for the canonical domain, lookalike hosts, and the separate
+  `bifrostmcp108` machine/OAuth endpoint.
+
 ## [1.3.0] — 2026-07-24
 
 Combined release folding two lines of work: the signed plugin-config client

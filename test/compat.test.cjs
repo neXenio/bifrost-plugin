@@ -130,6 +130,30 @@ test('session-start emits the context block and exits 0 with no gateway configur
   assert.match(r.stdout, /Bifrost gateway — session context/);
 });
 
+test('session-start emits the full-gateway migration line only for the exact legacy hostname', () => {
+  const legacy = runHook('session-start.cjs', {
+    BIFROST_URL: 'https://bifrostphil108.share.zrok.io/mcp',
+    BIFROST_VK: '',
+  }, tmpHome());
+  assert.strictEqual(legacy.status, 0);
+  assert.match(legacy.stdout, /replace `https:\/\/bifrostphil108\.share\.zrok\.io\/mcp`/);
+  assert.match(legacy.stdout, /with `https:\/\/bifrost\.culture4\.life\/mcp`/);
+  assert.match(legacy.stdout, /do not change `bifrostmcp108`/);
+
+  for (const url of [
+    'https://bifrost.culture4.life/mcp',
+    'https://bifrostmcp108.share.zrok.io/mcp',
+    'https://bifrostphil108.share.zrok.io.evil.example/mcp',
+  ]) {
+    const current = runHook('session-start.cjs', {
+      BIFROST_URL: url,
+      BIFROST_VK: '',
+    }, tmpHome());
+    assert.strictEqual(current.status, 0);
+    assert.doesNotMatch(current.stdout, /Bifrost endpoint migration/);
+  }
+});
+
 test('old (pre-1.1.0) plain-string cache facts still render', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));

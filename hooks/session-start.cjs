@@ -1,14 +1,16 @@
 'use strict';
 // SessionStart hook. Does NO blocking network work, so session start is always
 // fast (sub-second) even if the gateway is slow or down — important when this
-// ships to many machines. Three jobs, all best-effort, always exits 0:
-//   1. Emit guidance/bifrost-context.md (how to reach the gateway; code-mode).
-//   2. Emit a skill-library primer + a recalled-memory header, both read from a
+// ships to many machines. Five jobs, all best-effort, always exits 0:
+//   1. If BIFROST_URL still uses the retired full-gateway zrok hostname, emit
+//      one migration line. Never rewrites configuration.
+//   2. Emit guidance/bifrost-context.md (how to reach the gateway; code-mode).
+//   3. Emit a skill-library primer + a recalled-memory header, both read from a
 //      per-project cache (instant). First session has no cache → those sections
 //      are omitted but the cache gets seeded for next time.
-//   3. Emit the admin/user policy from the signed plugin-config bundle (also cached;
+//   4. Emit the admin/user policy from the signed plugin-config bundle (also cached;
 //      the cached copy was Ed25519-verified before it was written).
-//   4. If the cache is missing or stale, spawn a detached background worker
+//   5. If the cache is missing or stale, spawn a detached background worker
 //      (refresh.cjs) that talks to the gateway and refreshes both caches. It
 //      outlives this hook and never delays startup. The inject query it sends
 //      contains only the project directory basename plus a fixed recall phrase —
@@ -32,6 +34,20 @@ const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const LEGACY_FULL_GATEWAY_HOST = 'bifrostphil108.share.zrok.io';
+
+function emitEndpointMigrationNotice() {
+  const raw = (process.env.BIFROST_URL || '').trim();
+  if (!raw) return;
+  let host = '';
+  try { host = new URL(raw).hostname.toLowerCase(); } catch (_) { return; }
+  if (host !== LEGACY_FULL_GATEWAY_HOST) return;
+  process.stdout.write(
+    '⚠️ Bifrost endpoint migration: replace `https://bifrostphil108.share.zrok.io/mcp` ' +
+    'with `https://bifrost.culture4.life/mcp` in this client’s `BIFROST_URL` or MCP ' +
+    'configuration, then restart the client; do not change `bifrostmcp108`.\n\n'
+  );
+}
 
 // Signed admin/user policy from keyapp, read from the local cache (zero network — the
 // cached bundle was Ed25519-verified before it was ever written). refresh.cjs re-fetches
@@ -219,6 +235,7 @@ function spawnRefresh(file) {
 
 function main() {
   try {
+    emitEndpointMigrationNotice();
     emitContext();
     // Verified-at-write-time config, straight off disk. No network, so a slow or dead
     // gateway can never delay or break session start — we just run on the last good config.
