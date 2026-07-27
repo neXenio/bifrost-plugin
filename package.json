@@ -7,8 +7,7 @@
     "bifrost-plugin-install": "bin/install.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "lint:settings": "sh scripts/settings-lint.sh"
+    "test": "node --test test/*.test.js test/*.test.cjs"
   },
   "keywords": [
     "claude-code",
@@ -30,9 +29,6 @@
   "license": "MIT",
   "engines": {
     "node": ">=18"
-  },
-  "scripts": {
-    "test": "node --test test/compat.test.cjs"
   },
   "files": [
     ".claude-plugin/",
