@@ -2,7 +2,7 @@
 // SessionStart hook. Does NO blocking network work, so session start is always
 // fast (sub-second) even if the gateway is slow or down — important when this
 // ships to many machines. Five jobs, all best-effort, always exits 0:
-//   1. If BIFROST_URL still uses the retired full-gateway zrok hostname, emit
+//   1. If BIFROST_URL still uses a retired public zrok hostname, emit
 //      one migration line. Never rewrites configuration.
 //   2. Emit guidance/bifrost-context.md (how to reach the gateway; code-mode).
 //   3. Emit a skill-library primer + a recalled-memory header, both read from a
@@ -34,18 +34,22 @@ const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const LEGACY_FULL_GATEWAY_HOST = 'bifrostphil108.share.zrok.io';
+const LEGACY_GATEWAY_ENDPOINTS = new Map([
+  ['bifrostphil108.share.zrok.io', 'https://bifrostphil108.share.zrok.io/mcp'],
+  ['bifrostmcp108.share.zrok.io', 'https://bifrostmcp108.share.zrok.io/mcp'],
+]);
 
 function emitEndpointMigrationNotice() {
   const raw = (process.env.BIFROST_URL || '').trim();
   if (!raw) return;
   let host = '';
   try { host = new URL(raw).hostname.toLowerCase(); } catch (_) { return; }
-  if (host !== LEGACY_FULL_GATEWAY_HOST) return;
+  const oldEndpoint = LEGACY_GATEWAY_ENDPOINTS.get(host);
+  if (!oldEndpoint) return;
   process.stdout.write(
-    '⚠️ Bifrost endpoint migration: replace `https://bifrostphil108.share.zrok.io/mcp` ' +
+    `⚠️ Bifrost endpoint migration: replace \`${oldEndpoint}\` ` +
     'with `https://bifrost.culture4.life/mcp` in this client’s `BIFROST_URL` or MCP ' +
-    'configuration, then restart the client; do not change `bifrostmcp108`.\n\n'
+    'configuration, then restart the client.\n\n'
   );
 }
 

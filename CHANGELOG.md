@@ -4,6 +4,15 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-07-27
+
+### Changed
+
+- SessionStart now migrates clients from either retired public zrok hostname
+  (`bifrostphil108.share.zrok.io` or `bifrostmcp108.share.zrok.io`) to
+  `https://bifrost.culture4.life/mcp`. Both checks require an exact hostname;
+  canonical and lookalike hosts remain silent.
+
 ## [1.3.1] — 2026-07-27
 
 ### Changed
