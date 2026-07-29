@@ -98,8 +98,8 @@ match if your gateway does not use the default `skills`.
 
 The plugin works against any Bifrost gateway — point `BIFROST_URL` at it. The only
 deployment-specific behaviour is the endpoint-migration notice, which tells users on a
-retired hostname where to move. It ships configured for the neXenio gateway and is
-retargetable:
+retired hostname where to move. The canonical destination defaults to the neXenio
+gateway; each operator supplies their own retired-host list:
 
 | Var | Purpose | Default |
 |-----|---------|---------|
@@ -186,6 +186,20 @@ To pick up a new plugin release:
 /plugin marketplace update bifrost-marketplace
 /plugin install bifrost-plugin@bifrost-marketplace
 ```
+
+### npm fallback — MCP registration only
+
+The public npm package exposes the fallback installer for users who want the
+gateway MCP connection without installing the Claude Code plugin:
+
+```bash
+BIFROST_URL=https://bifrost.culture4.life/mcp \
+  npx --yes @nexenio/bifrost-plugin@latest --key vk_<your-key>
+```
+
+Omit `--key` to keep `${BIFROST_VK}` as a runtime template instead of storing
+the key in Claude's MCP entry. The unscoped npm name `bifrost-plugin` belongs
+to an unrelated project; always use the `@nexenio` scope.
 
 ### Persisting env vars
 

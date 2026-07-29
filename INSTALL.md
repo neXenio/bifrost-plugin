@@ -34,6 +34,16 @@ Run `/bifrost-setup` to verify.
 If you only want the gateway MCP server without the plugin's hooks and skills:
 
 ```bash
+BIFROST_URL=https://bifrost.culture4.life/mcp \
+  npx --yes @nexenio/bifrost-plugin@latest --key vk_<your-key>
+```
+
+This scoped npm package runs the fallback installer. The unscoped
+`bifrost-plugin` package is unrelated to this project.
+
+You can also register the server directly:
+
+```bash
 claude mcp add --scope user --transport http bifrost \
   "https://bifrost.culture4.life/mcp" --header "x-bf-vk: ${BIFROST_VK}"
 ```

@@ -1371,6 +1371,16 @@ test('all three manifests carry the same version', () => {
   assert.strictEqual(read('.claude-plugin/marketplace.json'), pkg, 'marketplace.json is out of step');
 });
 
+test('npm publication uses the owned public neXenio scope', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.strictEqual(pkg.name, '@nexenio/bifrost-plugin',
+    'never publish this repository under the unrelated unscoped package name');
+  assert.deepStrictEqual(pkg.publishConfig, {
+    access: 'public',
+    registry: 'https://registry.npmjs.org/',
+  });
+});
+
 test('the released version has a changelog entry', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
   const log = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
