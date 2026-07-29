@@ -54,9 +54,44 @@ test('.mcp.json keeps the exact pre-1.2.0 server shape (name, transport, templat
   });
 });
 
-test('hooks.json still registers exactly SessionStart and UserPromptSubmit', () => {
+// Stop was added deliberately to close the write half of the memory loop: everything
+// else in this plugin reads from the shared corpus and nothing ever put anything back.
+// It is additive — the two original events keep their existing contract — but Stop is
+// the one event that can hang a session (exit code 2 blocks the turn from ending), so
+// the properties that make it safe are pinned here rather than left to review.
+test('hooks.json registers the five events this plugin uses', () => {
   const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
-  assert.deepStrictEqual(Object.keys(cfg.hooks).sort(), ['SessionStart', 'UserPromptSubmit']);
+  assert.deepStrictEqual(Object.keys(cfg.hooks).sort(), [
+    'PostToolUse', 'PostToolUseFailure', 'SessionStart', 'Stop', 'UserPromptSubmit',
+  ]);
+});
+
+test('the usage counter is scoped to gateway tools only, and never blocks one', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
+  for (const evt of ['PostToolUse', 'PostToolUseFailure']) {
+    const group = cfg.hooks[evt][0];
+    // A bare server key never matches a plugin-bundled tool, so both spellings are
+    // required: `claude mcp add` produces mcp__bifrost__*, a marketplace install
+    // produces mcp__plugin_bifrost-plugin_bifrost__*.
+    assert.match(group.matcher, /bifrost/, `${evt} must be scoped to gateway tools`);
+    assert.match(group.matcher, /plugin_bifrost-plugin_bifrost/, `${evt} must cover the marketplace spelling`);
+    assert.strictEqual(group.hooks[0].async, true, `${evt} must not sit in the tool path`);
+  }
+});
+
+test('the Stop handler is async so it can never delay or block a turn', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
+  const handlers = cfg.hooks.Stop.flatMap((g) => g.hooks);
+  assert.strictEqual(handlers.length, 1);
+  assert.strictEqual(handlers[0].async, true,
+    'a synchronous Stop handler would sit between the user and the end of every turn');
+});
+
+test('the original two events keep their existing handlers', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
+  const cmd = (evt) => cfg.hooks[evt].flatMap((g) => g.hooks).map((h) => h.command).join(' ');
+  assert.match(cmd('SessionStart'), /session-start\.cjs/);
+  assert.match(cmd('UserPromptSubmit'), /prompt-submit\.cjs/);
 });
 
 // ---------------------------------------------------------------------------
@@ -108,15 +143,20 @@ test('cleartext http to a non-loopback host is refused by default, allowed with 
   process.env.BIFROST_URL = url;
   delete process.env.BIFROST_ALLOW_HTTP;
 
-  const blocked = await freshGateway(tmpHome()).getCapabilities(1000, { refresh: true });
-  assert.strictEqual(blocked, null);
-  assert.strictEqual(hits, 0, 'policy should block before any request is sent');
+  // close() in a finally: an assertion throwing before it left the listener open and
+  // held the event loop, so a FAILING test hung the whole run instead of reporting.
+  try {
+    const blocked = await freshGateway(tmpHome()).getCapabilities(1000, { refresh: true });
+    assert.strictEqual(blocked, null);
+    assert.strictEqual(hits, 0, 'policy should block before any request is sent');
 
-  process.env.BIFROST_ALLOW_HTTP = '1';
-  await freshGateway(tmpHome()).getCapabilities(1000, { refresh: true });
-  server.close();
-  delete process.env.BIFROST_ALLOW_HTTP;
-  assert.ok(hits > 0, 'legacy escape hatch should let the request through');
+    process.env.BIFROST_ALLOW_HTTP = '1';
+    await freshGateway(tmpHome()).getCapabilities(1000, { refresh: true });
+    assert.ok(hits > 0, 'legacy escape hatch should let the request through');
+  } finally {
+    server.close();
+    delete process.env.BIFROST_ALLOW_HTTP;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -130,42 +170,68 @@ test('session-start emits the context block and exits 0 with no gateway configur
   assert.match(r.stdout, /Bifrost gateway — session context/);
 });
 
-test('session-start emits a migration line only for exact retired public hostnames', () => {
-  for (const hostname of [
-    'bifrostphil108.share.zrok.io',
-    'bifrostmcp108.share.zrok.io',
-  ]) {
-    const legacy = runHook('session-start.cjs', {
-      BIFROST_URL: `https://${hostname}/mcp`,
-      BIFROST_VK: '',
-    }, tmpHome());
+// The retired-hostname list and its replacement are now operator configuration
+// (BIFROST_LEGACY_HOSTS / BIFROST_CANONICAL_URL) rather than compiled-in constants,
+// so a plugin anyone can install no longer carries one deployment's hostnames. The
+// contract that matters is unchanged: exact hostname match only, and silence unless
+// an operator has configured it.
+test('the migration notice is silent unless an operator configures it', () => {
+  const r = runHook('session-start.cjs', {
+    BIFROST_URL: 'https://old.example/mcp', BIFROST_VK: '',
+  }, tmpHome());
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /endpoint migration/,
+    'an unconfigured install must not advertise somebody else\'s migration');
+});
+
+test('a configured migration fires on an exact hostname and nothing else', () => {
+  const env = {
+    BIFROST_LEGACY_HOSTS: 'old-one.example,old-two.example',
+    BIFROST_CANONICAL_URL: 'https://gateway.example/mcp',
+    BIFROST_VK: '',
+  };
+
+  for (const hostname of ['old-one.example', 'old-two.example']) {
+    const legacy = runHook('session-start.cjs',
+      { ...env, BIFROST_URL: `https://${hostname}/mcp` }, tmpHome());
     assert.strictEqual(legacy.status, 0);
-    assert.ok(legacy.stdout.includes(`replace \`https://${hostname}/mcp\``));
-    assert.match(legacy.stdout, /with `https:\/\/bifrost\.culture4\.life\/mcp`/);
+    assert.match(legacy.stdout, /endpoint migration/);
+    assert.ok(legacy.stdout.includes(`https://${hostname}/mcp`));
+    assert.ok(legacy.stdout.includes('https://gateway.example/mcp'));
   }
 
+  // The canonical host itself, and lookalikes that merely contain a retired name as a
+  // prefix, must stay silent — a suffix match here would fire on an attacker domain.
   for (const url of [
-    'https://bifrost.culture4.life/mcp',
-    'https://bifrostphil108.share.zrok.io.evil.example/mcp',
-    'https://bifrostmcp108.share.zrok.io.evil.example/mcp',
+    'https://gateway.example/mcp',
+    'https://old-one.example.evil.example/mcp',
+    'https://not-old-one.example/mcp',
   ]) {
-    const current = runHook('session-start.cjs', {
-      BIFROST_URL: url,
-      BIFROST_VK: '',
-    }, tmpHome());
+    const current = runHook('session-start.cjs', { ...env, BIFROST_URL: url }, tmpHome());
     assert.strictEqual(current.status, 0);
-    assert.doesNotMatch(current.stdout, /Bifrost endpoint migration/);
+    assert.doesNotMatch(current.stdout, /endpoint migration/, `should be silent for ${url}`);
   }
 });
+
+// The inject cache is keyed on a hash of the FULL project path, not the bare
+// basename. Keying on the basename alone made ~/culture4life/backend and
+// ~/work-b/backend share one file, so one project's recalled facts were injected
+// into the other's session. Cache files are disposable and regenerate on next
+// refresh, so this is a cache-location change, not a data-format break — the
+// plain-string fact shape below is still honoured.
+function injectCacheName(projDir) {
+  const label = path.basename(projDir).replace(/[^A-Za-z0-9_-]/g, '_');
+  const digest = require('crypto').createHash('sha256').update(projDir).digest('hex').slice(0, 12);
+  return `inject-${label}-${digest}.json`;
+}
 
 test('old (pre-1.1.0) plain-string cache facts still render', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
-  const key = path.basename(proj).replace(/[^A-Za-z0-9_-]/g, '_');
   const cacheDir = path.join(home, '.cache', 'bifrost-plugin');
   fs.mkdirSync(cacheDir, { recursive: true });
   fs.writeFileSync(
-    path.join(cacheDir, `inject-${key}.json`),
+    path.join(cacheDir, injectCacheName(proj)),
     JSON.stringify({ at: Date.now(), memory: { facts: ['legacy plain-string fact'] } })
   );
   const r = runHook('session-start.cjs', {
@@ -178,11 +244,10 @@ test('old (pre-1.1.0) plain-string cache facts still render', () => {
 test('BIFROST_MEMORY_INJECT=0 still suppresses the memory header', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
-  const key = path.basename(proj).replace(/[^A-Za-z0-9_-]/g, '_');
   const cacheDir = path.join(home, '.cache', 'bifrost-plugin');
   fs.mkdirSync(cacheDir, { recursive: true });
   fs.writeFileSync(
-    path.join(cacheDir, `inject-${key}.json`),
+    path.join(cacheDir, injectCacheName(proj)),
     JSON.stringify({ at: Date.now(), memory: { facts: ['should not appear'] } })
   );
   const r = runHook('session-start.cjs', {
