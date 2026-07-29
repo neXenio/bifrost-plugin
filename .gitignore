@@ -36,3 +36,6 @@ Thumbs.db
 # Internal handover / working docs — not part of the shipped plugin
 HANDOVER-*.md
 temp/
+
+# Internal design analysis — kept local, not published to this public repo.
+research/

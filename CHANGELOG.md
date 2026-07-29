@@ -4,6 +4,140 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-29
+
+### Changed — open-source readiness
+
+- The endpoint-migration notice is configurable instead of compiled in. It still ships
+  with this deployment's retired hostnames and `https://bifrost.culture4.life/mcp` as
+  defaults, so the plugin installs and works as-is; `BIFROST_LEGACY_HOSTS`
+  (comma-separated) and `BIFROST_CANONICAL_URL` let another operator retarget it
+  without patching source, and an empty `BIFROST_LEGACY_HOSTS` disables it. Exact
+  hostname matching is unchanged, so a lookalike domain still cannot trigger it.
+- The documented gateway URL is `https://bifrost.culture4.life/mcp` throughout.
+- Code comments and test fixtures use neutral server names rather than deployment
+  ones, so the examples read correctly for anyone.
+- Added `SECURITY.md` (reporting, and what the plugin touches: credentials, context
+  injection, local and project state, signed policy) and `CONTRIBUTING.md`.
+- No longer publishes an orphaned Ed25519 private key fixture. It was never tracked by
+  git — `*.pem` is gitignored — but it sat in the working tree and would be included by
+  `npm pack` from that tree. Nothing referenced it and its public half was trusted by
+  nothing, so there is no exposure to remediate; a guard now fails the build on key
+  material anywhere in the published file set.
+
+### Fixed
+
+- **Hooks can now authenticate.** Hook processes do not inherit Claude Code's MCP
+  credential: `claude mcp add` (what `bin/install.js` and `auto-setup.cjs` use)
+  writes the gateway URL and virtual key into `~/.claude.json`, never into the
+  environment, and every lookup here was env-only. On an affected machine
+  `gw.env()` returned empty, the background refresh never ran, and skill, memory
+  and tool context were silently absent from every session while the static
+  guidance still printed — so a plugin that had never worked looked healthy. The
+  hooks now fall back to reading the MCP server entry from `~/.claude.json`.
+  **This is a new file dependency**: the plugin reads `~/.claude.json` when the
+  environment does not carry the credential.
+- URL and key are always taken from the same source. Resolving them independently
+  let a stale `export BIFROST_URL=…` pair with the key from `~/.claude.json` and
+  send that key to a host it was never issued for.
+- The gateway URL printed into session context is reduced to scheme, host and path.
+  An MCP endpoint may legitimately carry credentials in userinfo or the query
+  string, and everything emitted reaches the model.
+- Flat tool names are split on the matched tool token rather than a guessed hyphen,
+  so servers named like `luca-memory` and tools named like `skill-search` both
+  resolve. The discovered tool is now called by the name the gateway advertised.
+- The default memory relevance floor is 0 (was 0.45). Scores are not comparable
+  across memory servers, and the previous default sat entirely above one gateway's
+  measured range, silently dropping every scored fact.
+- A degraded refresh no longer blanks a good cache, and no longer resurrects a
+  capability the current run did not produce (memory revoked, KB wing disabled).
+  Carried-over facts are marked stale, bounded to 7 days, and keep the previous
+  timestamp so the staleness notice can still fire.
+- The per-project cache key includes a hash of the full project path. Keying on the
+  bare directory name made `~/a/backend` and `~/b/backend` share one cache and
+  cross-inject each other's recalled facts.
+- `guidance/bifrost-context.md` no longer claims top-level `for`/`if` must be
+  wrapped in a `def` for `executeToolCode`. Verified false against a live gateway.
+
+### Added
+
+- **Usage counter and adaptive injection (`hooks/usage.cjs`, `PostToolUse` +
+  `PostToolUseFailure`, async).** Every instruction this plugin injects was previously
+  asserted and never measured: nothing could say whether `skill_search` was ever
+  called, whether anything was recorded, or whether behaviour differed from before the
+  plugin existed. A correct fix silently disabled the tool roster and no mechanism
+  would have surfaced it. The counter records, per session, which capability classes
+  were used and whether the call succeeded.
+
+  **Counts only. No queries, arguments, results, prompts, paths or content of any
+  kind, and nothing leaves the machine** — SessionStart reads the same local file.
+  The stored shape is pinned by an exact key allowlist so a field cannot be added
+  casually. Only tools matching the gateway's MCP namespace are counted; a local tool
+  sharing a name is not attributed to the gateway.
+
+  SessionStart then adapts. An agent that has searched the library in most recent
+  sessions gets the calls and nothing else — the argument has been won, and the tokens
+  are better not spent. One that has not searched in N sessions is told so, with the
+  number. Below three observations nothing adapts. Measured: ~5,600 bytes when the
+  habit is absent, ~4,200 when it is established.
+
+- **Tool roster.** Discovery already walked the full code-mode catalog and threw it
+  away, and only walked it at all when a capability was missing — so on a gateway
+  where skills and memory are both flat it was never fetched. SessionStart now
+  lists the code-mode servers with sample tool names, the four-step
+  `listToolFiles` → `readToolFile` → `getToolDocs` → `executeToolCode` workflow,
+  and the correct `fileName` parameter.
+- **`bifrost-code-mode` skill** — full reference for reaching servers that are not
+  exposed as flat tools.
+- **Skill-library ordering.** SessionStart and UserPromptSubmit both name
+  `skill_search` and `skill_navigate` and say to check the team library before
+  improvising — then to judge what comes back on its merits (see *Changed*).
+- **`Stop` hook (`hooks/session-reflect.cjs`), async.** Periodic memory check-in
+  asking whether anything is worth remembering, first at turn 3 then every 8 turns,
+  with later check-ins tapered to one line. Findings are appended to a local,
+  git-ignored candidate file for review (see *Changed*), never written to shared
+  memory by the hook. Answering "nothing" is explicitly permitted, and the check is
+  not narrated to the user. Exit code is 0 on every path (exit 2 on `Stop` blocks a
+  turn from ending), and session markers are pruned after 2 days.
+- A one-line notice when the plugin is unconfigured or its cache is stale, instead
+  of failing invisibly. It names which half expired, since the skill/memory cache and
+  the tool-roster cache expire independently.
+- **`/bifrost-candidates`** — reviews the recorded candidates and promotes approved
+  ones into shared memory. Promotion requires explicit confirmation; a write path
+  whose output nothing reads is not a loop.
+
+### Changed
+
+- Memory candidates are written to `.bifrost/candidates.md` in the project (created
+  git-ignored by the hook), not to the shared corpus. `memory_search` accepts no tag
+  or state filter, so a `candidate`-tagged entry would be recalled by every colleague
+  immediately as settled knowledge — the tag would have labelled nothing and gated
+  nothing. A local file is the only place a candidate is verifiably not recalled.
+  Keeping it in the project rather than `~/.cache` also avoids a permission prompt on
+  every append, and keeps the only copy of unreviewed findings out of a directory that
+  cache cleaners purge.
+- Later memory check-ins taper to one line, as the per-prompt nudge already does. The
+  full criteria list is ~500 tokens and was byte-identical every 8 turns.
+- The per-prompt skill nudge emits its full form once per session, then one line.
+- The skill-library instruction no longer claims the contents are "validated" or
+  demands precedence over the agent's own approach. Nobody validated a thousand
+  skills and the navigator's labels are auto-generated; instructing the model to defer
+  to a bad match is worse than not mentioning the library. It now says: check here
+  first, then judge what comes back on its merits.
+- The tool roster expires on the same schedule as the skill and memory context (24h),
+  rather than never. It had been read through a path that skipped every check, so an
+  unreachable gateway kept injecting a roster of arbitrary age while the notice
+  claimed context had been skipped. Callers now pass an explicit emit tolerance:
+  that is a different question from the 1h network-refresh interval, and conflating
+  the two would drop the roster from any session starting more than an hour after the
+  last refresh.
+- The `Stop` hook creates `<project>/.bifrost/` for the candidate spool — the one
+  place this plugin writes outside `~/.cache/bifrost-plugin/`. In-workspace avoids a
+  permission prompt on every append; the directory is created self-ignoring. If it
+  cannot be created, the check-in stays silent rather than naming an unusable path.
+- Hooks drain stdout before exiting. Writes to a pipe are asynchronous on Windows and
+  `process.exit()` does not flush them; SessionStart emits ~9KB.
+
 ## [1.3.2] — 2026-07-27
 
 ### Changed

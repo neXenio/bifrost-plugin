@@ -170,46 +170,55 @@ test('session-start emits the context block and exits 0 with no gateway configur
   assert.match(r.stdout, /Bifrost gateway — session context/);
 });
 
-// The retired-hostname list and its replacement are now operator configuration
-// (BIFROST_LEGACY_HOSTS / BIFROST_CANONICAL_URL) rather than compiled-in constants,
-// so a plugin anyone can install no longer carries one deployment's hostnames. The
-// contract that matters is unchanged: exact hostname match only, and silence unless
-// an operator has configured it.
-test('the migration notice is silent unless an operator configures it', () => {
+// The endpoint-migration notice is off until an operator lists the hostnames being
+// retired. Those are per-machine tunnel endpoints, so they are configuration rather
+// than compiled-in constants; the destination is the published gateway and ships as
+// the default, so enabling the notice needs nothing but the list.
+test('the migration notice is silent until an operator configures it', () => {
   const r = runHook('session-start.cjs', {
-    BIFROST_URL: 'https://old.example/mcp', BIFROST_VK: '',
+    BIFROST_URL: 'https://retired.example/mcp', BIFROST_VK: '',
   }, tmpHome());
   assert.strictEqual(r.status, 0);
   assert.doesNotMatch(r.stdout, /endpoint migration/,
-    'an unconfigured install must not advertise somebody else\'s migration');
+    'an unconfigured install must not advertise a migration');
 });
 
-test('a configured migration fires on an exact hostname and nothing else', () => {
-  const env = {
-    BIFROST_LEGACY_HOSTS: 'old-one.example,old-two.example',
-    BIFROST_CANONICAL_URL: 'https://gateway.example/mcp',
+test('listing a retired host is enough — the destination defaults to the gateway', () => {
+  const r = runHook('session-start.cjs', {
+    BIFROST_URL: 'https://retired.example/mcp',
+    BIFROST_LEGACY_HOSTS: 'retired.example,also-retired.example',
     BIFROST_VK: '',
-  };
+  }, tmpHome());
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /endpoint migration/);
+  assert.ok(r.stdout.includes('https://retired.example/mcp'));
+  assert.ok(r.stdout.includes('https://bifrost.culture4.life/mcp'),
+    'the published gateway is the default destination');
+});
 
-  for (const hostname of ['old-one.example', 'old-two.example']) {
-    const legacy = runHook('session-start.cjs',
-      { ...env, BIFROST_URL: `https://${hostname}/mcp` }, tmpHome());
-    assert.strictEqual(legacy.status, 0);
-    assert.match(legacy.stdout, /endpoint migration/);
-    assert.ok(legacy.stdout.includes(`https://${hostname}/mcp`));
-    assert.ok(legacy.stdout.includes('https://gateway.example/mcp'));
-  }
+test('the destination is overridable for a different deployment', () => {
+  const r = runHook('session-start.cjs', {
+    BIFROST_URL: 'https://retired.example/mcp',
+    BIFROST_LEGACY_HOSTS: 'retired.example',
+    BIFROST_CANONICAL_URL: 'https://their-gateway.example/mcp',
+    BIFROST_VK: '',
+  }, tmpHome());
+  assert.ok(r.stdout.includes('https://their-gateway.example/mcp'));
+  assert.ok(!r.stdout.includes('culture4.life'), 'must not leak the default destination');
+});
 
-  // The canonical host itself, and lookalikes that merely contain a retired name as a
-  // prefix, must stay silent — a suffix match here would fire on an attacker domain.
+test('matching is exact, so a lookalike domain cannot trigger it', () => {
+  // A suffix match would fire on an attacker-controlled domain that merely ends with
+  // a retired hostname.
+  const env = { BIFROST_LEGACY_HOSTS: 'retired.example', BIFROST_VK: '' };
   for (const url of [
-    'https://gateway.example/mcp',
-    'https://old-one.example.evil.example/mcp',
-    'https://not-old-one.example/mcp',
+    'https://bifrost.culture4.life/mcp',
+    'https://retired.example.evil.example/mcp',
+    'https://not-retired.example/mcp',
   ]) {
-    const current = runHook('session-start.cjs', { ...env, BIFROST_URL: url }, tmpHome());
-    assert.strictEqual(current.status, 0);
-    assert.doesNotMatch(current.stdout, /endpoint migration/, `should be silent for ${url}`);
+    const r = runHook('session-start.cjs', { ...env, BIFROST_URL: url }, tmpHome());
+    assert.strictEqual(r.status, 0);
+    assert.doesNotMatch(r.stdout, /endpoint migration/, `should be silent for ${url}`);
   }
 });
 
@@ -281,4 +290,20 @@ test('install.js fails loudly (not silently) when BIFROST_URL is unset', () => {
   });
   assert.strictEqual(r.status, 1);
   assert.match(r.stderr, /BIFROST_URL is not set/);
+});
+
+test('no hostname list is compiled in — the notice needs configuration for ANY host', () => {
+  // Guards the reason the list is configuration: retired endpoints here are per-machine
+  // tunnels named after whoever created them, and a public plugin should not ship a
+  // roster of somebody's infrastructure. Re-adding a default would make this fail.
+  for (const url of [
+    'https://a-retired-tunnel.share.zrok.io/mcp',
+    'https://some-old-host.example/mcp',
+    'https://bifrost.culture4.life/mcp',
+  ]) {
+    const r = runHook('session-start.cjs', { BIFROST_URL: url, BIFROST_VK: '' }, tmpHome());
+    assert.strictEqual(r.status, 0);
+    assert.doesNotMatch(r.stdout, /endpoint migration/,
+      `no host may trigger the notice without BIFROST_LEGACY_HOSTS: ${url}`);
+  }
 });

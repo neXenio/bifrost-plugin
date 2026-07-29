@@ -65,7 +65,7 @@ additive, not an auth migration.
 
 These are **not** solved by the plugin and must be in place first:
 
-1. **Production gateway, not a dev tunnel.** A single laptop behind a `zrok`/ngrok
+1. **Production gateway, not a dev tunnel.** A single laptop behind an ad-hoc
    tunnel will not serve 300 users. Deploy bifrost on real infra (container/VM),
    with a stable DNS name, TLS, health checks, and restart-on-failure.
 2. **Virtual-key provisioning at scale.** 300 personal `vk_…` keys need to be

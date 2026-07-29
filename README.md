@@ -30,7 +30,7 @@ The same gateway supports three ways to connect, depending on the client:
 
 | Client | Auth | Setup |
 |---|---|---|
-| **Claude Desktop (recommended)** | OAuth 2.1 via the company Keycloak | Settings → Connectors → Add custom connector → paste `https://bifrost.luca-app.de/mcp` → log in with your company account. Zero further config. |
+| **Claude Desktop (recommended)** | OAuth 2.1 via the company Keycloak | Settings → Connectors → Add custom connector → paste `https://bifrost.culture4.life/mcp` → log in with your company account. Zero further config. |
 | **Claude Desktop (fallback)** | Local `mcp-remote` proxy injecting your VK | See snippet below — only needed if the gateway's OAuth endpoint is unavailable |
 | **Claude Code CLI** | `x-bf-vk` header from `${BIFROST_VK}` | Unchanged — everything in [Install](#install) below |
 
@@ -52,7 +52,7 @@ The same gateway supports three ways to connect, depending on the client:
     "bifrost": {
       "command": "npx",
       "args": [
-        "mcp-remote", "https://bifrost.luca-app.de/mcp",
+        "mcp-remote", "https://bifrost.culture4.life/mcp",
         "--transport", "http-only",
         "--header", "x-bf-vk:${BIFROST_VK}"
       ],
@@ -93,6 +93,31 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_REFRESH` | Set to `0` to disable the background cache refresh entirely (no session-start-initiated network traffic) | (enabled) |
 | `BIFROST_REFRESH_INTERVAL_MS` | Minimum interval between background gateway refreshes | `3600000` (1 hour) |
 | `BIFROST_ALLOW_HTTP` | Set to `1` to let hooks contact a plain-HTTP gateway on a non-loopback host (legacy private-network deployments — the key crosses the wire unencrypted) | (off — HTTPS or loopback only) |
+
+### Running your own gateway
+
+The plugin works against any Bifrost gateway — point `BIFROST_URL` at it. The only
+deployment-specific behaviour is the endpoint-migration notice, which tells users on a
+retired hostname where to move. It ships configured for the neXenio gateway and is
+retargetable:
+
+| Var | Purpose | Default |
+|-----|---------|---------|
+| `BIFROST_LEGACY_HOSTS` | Comma-separated hostnames being retired. Matched exactly — a lookalike domain ending in one of these does not trigger it. | (unset — notice disabled) |
+| `BIFROST_CANONICAL_URL` | Gateway URL the notice tells users to move to | `https://bifrost.culture4.life/mcp` |
+
+The retired hostnames are **not** compiled in: they are per-machine tunnel endpoints,
+and a plugin anyone can install should not ship a roster of one organisation's
+infrastructure. Enabling the notice therefore takes one line of operator config — put
+it where your team already sets env, e.g. `~/.claude/settings.json`:
+
+```json
+{ "env": { "BIFROST_LEGACY_HOSTS": "old-tunnel-a.example,old-tunnel-b.example" } }
+```
+
+Anyone still pointing at one of those hosts is then told, once per session, to move to
+`BIFROST_CANONICAL_URL`. Without it the notice never fires and users on a retired
+endpoint get no signal — which is the trade: nothing published, nothing automatic.
 | `BIFROST_KEYAPP_URL` | SSO keyapp URL — powers the explicit `/bifrost-setup` browser provisioning flow and signed plugin-config delivery | (unset — both skipped) |
 | `BIFROST_PLUGIN_CONFIG` | Set to `0` to disable signed plugin-config delivery entirely (kill switch) | (enabled when `BIFROST_KEYAPP_URL` + `BIFROST_VK` are set) |
 | `BIFROST_PLUGIN_CONFIG_TTL_MS` | How long a fetched plugin-config stays fresh before the manifest is re-checked | `900000` (15 min) |
@@ -245,6 +270,29 @@ node bin/install.js --dry-run             # prints the claude mcp add command in
 | `bifrost-onboard` | "set up bifrost", "onboard me to bifrost", "install bifrost gateway" |
 | `bifrost-debug` | "bifrost not working", "mcp not connecting", "skills not found" |
 | `bifrost-mcp-setup` | "manually add bifrost mcp", "edit mcp.json for bifrost", "installer failed" |
+| `bifrost-code-mode` | "executeToolCode", "code mode", "listToolFiles", "how do I call gitlab through the gateway" |
+
+---
+
+## Memory candidates
+
+During a session the `Stop` hook periodically asks whether anything is worth
+remembering. Findings are appended to **`.bifrost/candidates.md`** in the project
+root, which the hook creates git-ignored on first use.
+
+Candidates are **local and unreviewed**. Nothing is shared until someone promotes it:
+
+```
+/bifrost-candidates      # review, promote the good ones, prune the rest
+```
+
+They deliberately do not go straight into shared memory. `memory_search` accepts no
+tag or state filter, so anything written to the corpus is recalled by every colleague
+immediately as settled team knowledge — a mid-session judgement should not become
+company-wide fact without a human deciding it should.
+
+Nothing is written automatically, and answering "nothing worth recording" is a normal
+outcome. Delete the file at any time; it regenerates empty.
 
 ---
 
@@ -297,7 +345,7 @@ After install, enable, and restart:
 
 **Hooks not firing** — hooks ship inside the plugin (`hooks/hooks.json`, auto-loaded by Claude Code). Confirm installed + enabled via `/plugin`, then restart.
 
-**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old zrok link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping).
+**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old ephemeral tunnel link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping).
 
 Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` diagnosis flow.
 

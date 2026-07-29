@@ -18,10 +18,14 @@ MCP server automatically — no installer needed. Then persist the env vars in
 your shell profile and restart Claude Code:
 
 ```bash
-echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
+echo 'export BIFROST_URL=https://bifrost.culture4.life/mcp' >> ~/.zshrc   # or ~/.bashrc
 echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+The URL above is the neXenio gateway. Running your own? Point `BIFROST_URL` at it —
+nothing else in the plugin is deployment-specific, and the endpoint-migration notice
+is retargetable via `BIFROST_LEGACY_HOSTS` / `BIFROST_CANONICAL_URL` (see README).
 
 Run `/bifrost-setup` to verify.
 
@@ -31,7 +35,7 @@ If you only want the gateway MCP server without the plugin's hooks and skills:
 
 ```bash
 claude mcp add --scope user --transport http bifrost \
-  "https://<your-gateway-host>/mcp" --header "x-bf-vk: ${BIFROST_VK}"
+  "https://bifrost.culture4.life/mcp" --header "x-bf-vk: ${BIFROST_VK}"
 ```
 
 The installer script wraps exactly this command (it never edits config files
@@ -40,7 +44,7 @@ directly):
 ```bash
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
-export BIFROST_URL=https://<your-gateway-host>/mcp
+export BIFROST_URL=https://bifrost.culture4.life/mcp
 node bin/install.js            # uses the ${BIFROST_VK} runtime template
 node bin/install.js --key vk_… # or bake the key into the entry instead
 node bin/install.js --dry-run  # print the command without running it

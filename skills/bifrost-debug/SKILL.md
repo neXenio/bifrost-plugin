@@ -90,8 +90,8 @@ Desktop connects via OAuth through the gateway's bridge — not via `BIFROST_VK`
 Work through these in order:
 
 1. **`mcp_registration_failed` on Connect** — is the connector URL the stable
-   gateway domain (e.g. `https://bifrost.luca-app.de/mcp`)? Old ephemeral
-   tunnel URLs (`*.share.zrok.io`) have no OAuth bridge and will always fail.
+   gateway domain (e.g. `https://bifrost.culture4.life/mcp`)? Old ephemeral
+   ephemeral tunnel URLs have no OAuth bridge and will always fail.
 2. **Check OAuth discovery is live:**
    ```bash
    curl -s https://<stable-gateway-host>/.well-known/oauth-protected-resource   # → JSON with authorization_servers
@@ -124,3 +124,23 @@ Work through these in order:
 
 For manual MCP wiring: `/bifrost-mcp-setup`.
 For fresh onboarding: `/bifrost-onboard`.
+
+## Memory check-ins are not appearing
+
+The `Stop` hook asks about memory candidates from the third turn of a session, then
+every eight. It stays silent when:
+
+- the session is shorter than three turns (deliberate — one-shot questions are not
+  interrupted);
+- no gateway credential resolves (same check as everything else here — see step 1);
+- no memory server was discovered, so `~/.cache/bifrost-plugin/discovery.json` has a
+  null `memory` field;
+- its marker file says this session was already asked recently. Markers live in
+  `~/.cache/bifrost-plugin/reflect/` and are pruned after two days.
+
+It is registered `async`, so its text arrives on the **next** turn, not the one that
+triggered it. A check-in fired by the final turn of a session is never delivered.
+
+Findings land in `.bifrost/candidates.md` in the project root, git-ignored. Review
+them with `/bifrost-candidates`. If that file is missing, nothing has been recorded
+in this project yet — that is not a fault.

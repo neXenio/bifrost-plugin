@@ -42,16 +42,20 @@ const usage = require('./usage.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Endpoint-migration notice, configured per deployment rather than compiled in.
+// Endpoint-migration notice: tells a user still pointing at a retired hostname where
+// to move. Off unless an operator lists the hostnames being retired.
 //
-// This previously hardcoded one organisation's tunnel hostnames and its canonical
-// gateway. That is operational detail belonging to a single deployment, and in a
-// plugin anyone can install it means unrelated users get migration advice about
-// infrastructure that is not theirs. Both sides now come from the environment and the
-// notice is silent unless an operator configures it:
+//   BIFROST_LEGACY_HOSTS    comma-separated hostnames being retired (required)
+//   BIFROST_CANONICAL_URL   where to move to; defaults to this project's gateway
 //
-//   BIFROST_LEGACY_HOSTS    comma-separated hostnames being retired
-//   BIFROST_CANONICAL_URL   the gateway URL users should move to
+// The retired names are deliberately NOT compiled in. They are individual tunnel
+// endpoints — one per machine, named after whoever created them — and baking a list
+// of somebody's personal tunnels into a public plugin publishes infrastructure detail
+// for no benefit to anyone installing it. The destination is different: it is the
+// published gateway, so it ships as the default and the notice needs no configuration
+// beyond the list.
+const DEFAULT_CANONICAL_URL = 'https://bifrost.culture4.life/mcp';
+
 function legacyHosts() {
   return (process.env.BIFROST_LEGACY_HOSTS || '')
     .split(',')
@@ -61,7 +65,7 @@ function legacyHosts() {
 
 function emitEndpointMigrationNotice() {
   const raw = (process.env.BIFROST_URL || '').trim();
-  const canonical = (process.env.BIFROST_CANONICAL_URL || '').trim();
+  const canonical = (process.env.BIFROST_CANONICAL_URL || DEFAULT_CANONICAL_URL).trim();
   const hosts = legacyHosts();
   if (!raw || !canonical || !hosts.length) return;
 
