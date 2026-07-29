@@ -1,6 +1,6 @@
 {
-  "name": "@nexenio/bifrost-plugin",
-  "version": "1.4.1",
+  "name": "bifrost-plugin",
+  "version": "1.4.0",
   "description": "Bifrost MCP gateway plugin for Claude Code: memory auto-injection, skill discovery, one-command onboarding.",
   "main": "bin/install.js",
   "bin": {
@@ -25,10 +25,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/neXenio/bifrost-plugin.git"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
   },
   "license": "MIT",
   "engines": {

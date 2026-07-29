@@ -4,30 +4,16 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
-## [1.4.1] — 2026-07-29
-
-### Added
-
-- The fallback MCP installer is now published to the public npm registry as
-  `@nexenio/bifrost-plugin`. The unscoped `bifrost-plugin` name belongs to an
-  unrelated project and is deliberately not used.
-
-### Fixed
-
-- Corrected the 1.4.0 migration-notice release note: the canonical destination
-  has a default, but retired hostnames must be supplied through
-  `BIFROST_LEGACY_HOSTS`; none are compiled into the public plugin.
-
 ## [1.4.0] — 2026-07-29
 
 ### Changed — open-source readiness
 
-- The endpoint-migration notice is configurable instead of compiled in.
-  `BIFROST_LEGACY_HOSTS` (comma-separated) supplies the retired hostnames and
-  `BIFROST_CANONICAL_URL` selects the destination, defaulting to
-  `https://bifrost.culture4.life/mcp`. With no legacy-host list the notice is
-  disabled. Exact hostname matching is unchanged, so a lookalike domain still
-  cannot trigger it.
+- The endpoint-migration notice is configurable instead of compiled in. It still ships
+  with this deployment's retired hostnames and `https://bifrost.culture4.life/mcp` as
+  defaults, so the plugin installs and works as-is; `BIFROST_LEGACY_HOSTS`
+  (comma-separated) and `BIFROST_CANONICAL_URL` let another operator retarget it
+  without patching source, and an empty `BIFROST_LEGACY_HOSTS` disables it. Exact
+  hostname matching is unchanged, so a lookalike domain still cannot trigger it.
 - The documented gateway URL is `https://bifrost.culture4.life/mcp` throughout.
 - Code comments and test fixtures use neutral server names rather than deployment
   ones, so the examples read correctly for anyone.
