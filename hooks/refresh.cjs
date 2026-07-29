@@ -6,9 +6,9 @@
 // exits, so session start never waits on the gateway (which can be slow or down).
 //
 // Usage: node refresh.cjs <cacheFile> <memoryQuery>
-// Writes {at, skills:{server,mode,branches[]},
-// memory:{server,facts:[{content,similarity}]}, kb:{server,facts:[...]}} to
-// the cache file. Silent-fail; always exits 0.
+// Writes {at, skills:{server,mode[,count]},
+// memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince]},
+// kb:{...}} to the cache file. Silent-fail; always exits 0.
 //
 // KB recall reuses the same memory server/capability — there is no separate
 // kb-mcp. It is just memory_search scoped to the KB wing (wing=<BIFROST_KB_WING>).
@@ -20,7 +20,8 @@
 //   BIFROST_MEMORY_SNIPPET_LEN — base per-fact snippet length in chars (default 180)
 //   BIFROST_INJECT_BUDGET     — total char budget per section (default ~2000,
 //                               ~500 tokens at ~4 chars/token)
-//   BIFROST_MEMORY_MIN_SIM    — drop results below this similarity (default 0.45)
+//   BIFROST_MEMORY_MIN_SIM    — drop results below this similarity (default 0, i.e.
+//                               no floor; scores are not comparable across servers)
 //   BIFROST_MEMORY_FAST       — set to 1 to pass fast:true to memory_search
 //                               (server-side fast path; opt-in until the live
 //                               gateway ships the param — an unknown param on a
@@ -38,9 +39,18 @@ const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency i
 const DEFAULT_MAX_FACTS = 6;
 const DEFAULT_SNIPPET_LEN = 180;
 const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
-const DEFAULT_MIN_SIM = 0.45;
+// No similarity floor by default. Relevance scores are not comparable across memory
+// servers — cosine, dot-product and BM25-fused scores do not share a scale, and this
+// gateway's own measured range (0.381-0.415) sat entirely BELOW the previous 0.45
+// default, so every scored fact was dropped and the memory section silently rendered
+// empty. Ranking plus MAX_FACTS and the char budget already bound what gets injected;
+// a hard threshold on an unknown scale only ever removed good results. Set
+// BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
+const DEFAULT_MIN_SIM = 0;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
-const MAX_BRANCHES = 10;
+// How long facts may be carried forward across empty refreshes before we stop
+// injecting them. Bounds retention when a gateway stays broken.
+const MAX_CARRY_FORWARD_MS = 7 * 24 * 60 * 60 * 1000;
 
 function envInt(name, dflt) {
   const v = parseInt(process.env[name], 10);
@@ -185,18 +195,31 @@ async function main() {
   const out = { at: Date.now() };
 
   if (caps.skills) {
-    const tree = await gw.callCapability(caps.skills, 'skill_navigate', {}, TIMEOUT_MS);
-    const branches = (tree || '')
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => /skill_navigate\(node=/.test(l))
-      .map((l) => l.replace(/^[•\-\*]\s*/, ''))
-      .slice(0, MAX_BRANCHES);
-    out.skills = { server: caps.skills.server, mode: caps.skills.mode, branches };
+    // No library size here on purpose. Telling the model "N skills available" is the
+    // cheapest way to make searching obviously worth a tool call, but this gateway
+    // exposes no way to learn N: the skills server has only get_skill, skill_navigate
+    // and skill_search; skill_search reports only its own hit count and caps results
+    // at 20 regardless of `k`; and counting via the navigator costs 200+ calls per
+    // user per refresh. Reinstate a count here the moment the skills server exposes
+    // one — session-start already renders it when `count` is present.
+    out.skills = { server: caps.skills.server, mode: caps.skills.mode };
   }
 
   if (caps.memory) {
-    out.memory = { server: caps.memory.server, facts: await searchFacts(caps.memory, query, null) };
+    out.memory = {
+      server: caps.memory.server,
+      mode: caps.memory.mode,
+      facts: await searchFacts(caps.memory, query, null),
+    };
+    // Corpus size, for the same reason as the skill count: it tells the model whether
+    // the shared memory is worth querying. memory_stats is cheap and widely present;
+    // absence just means the size line is omitted.
+    const stats = await gw.callCapability(caps.memory, 'memory_stats', {}, TIMEOUT_MS);
+    try {
+      const s = JSON.parse(stats);
+      const total = (s.hot_count || 0) + (s.cold_count || 0);
+      if (total > 0) out.memory.total = total;
+    } catch (_) { /* no stats tool, or a shape we don't read — size line omitted */ }
 
     // No default wing name: KB recall is opt-in only, via an explicit
     // BIFROST_KB_WING configured for this gateway's KB scope.
@@ -207,14 +230,65 @@ async function main() {
     }
   }
 
+  // Never let a degraded response destroy a good cache. A single hiccup used to
+  // overwrite six healthy facts with an empty list AND refresh the timestamp, so the
+  // blanked cache then read as valid for another day while looking deliberate.
+  // Mirrors the fail-closed contract the signed plugin-config path already has.
+  try {
+    const prev = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    mergeWithPrevious(out, prev);
+  } catch (_) { /* no previous cache — nothing to preserve */ }
+
   try {
     fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
     fs.writeFileSync(cacheFile, JSON.stringify(out), 'utf8');
   } catch (_) {}
 }
 
+// Carry forward the previous cache where this run produced nothing usable. Split out
+// of main() so it can be tested without a gateway. Mutates `out`.
+function mergeWithPrevious(out, prev, now = Date.now()) {
+  if (!prev || typeof prev !== 'object') return out;
+  {
+    for (const section of ['memory', 'kb']) {
+      // Only ever carry facts forward for a capability THIS run still produced. If the
+      // section is absent the capability is gone — memory revoked from the key, or the
+      // KB wing switched off — and resurrecting it would keep injecting data the user
+      // is no longer entitled to. Deprovisioning has to actually deprovision.
+      if (!out[section]) continue;
+
+      const fresh = Array.isArray(out[section].facts) ? out[section].facts : [];
+      const old = prev && prev[section] && Array.isArray(prev[section].facts) ? prev[section].facts : [];
+      if (fresh.length || !old.length) continue;
+
+      // Bound the carry-forward. Without a ceiling a permanently broken gateway serves
+      // day-one facts forever, and each rewrite refreshes the timestamp, so nothing
+      // ever looks stale to anyone.
+      const since = Number.isFinite(prev[section].staleSince) ? prev[section].staleSince
+        : (Number.isFinite(prev.at) ? prev.at : now);
+      if (now - since > MAX_CARRY_FORWARD_MS) continue; // let it go empty
+
+      out[section] = Object.assign({}, out[section], { facts: old, stale: true, staleSince: since });
+    }
+
+    if (out.memory && !out.memory.total && prev && prev.memory && prev.memory.total) {
+      out.memory.total = prev.memory.total;
+    }
+    if (out.skills && !out.skills.count && prev && prev.skills && prev.skills.count) {
+      out.skills.count = prev.skills.count;
+    }
+
+    // Do not present carried-over content as a fresh fetch. session-start's staleness
+    // notice keys off the cache timestamp, so refreshing it on a run that produced
+    // nothing new would silence the very warning added to make this visible.
+    const carried = ['memory', 'kb'].some((k) => out[k] && out[k].stale);
+    if (carried && Number.isFinite(prev.at)) out.at = prev.at;
+  }
+  return out;
+}
+
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(() => process.exit(0));
 }
 
-module.exports = { parseStructured, extractFactsLegacy, budgetFill, truncate };
+module.exports = { parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious, MAX_CARRY_FORWARD_MS };

@@ -28,47 +28,30 @@ modes, and **the same gateway usually mixes both**:
    result = <server>.<tool>(param="value")
    ```
 
-   Discover what code-mode offers with `listToolFiles` (lists `servers/<server>/<tool>.pyi`),
-   `readToolFile` (confirm a tool's parameters), and `getToolDocs` (full docs).
-   Starlark note: top-level `for`/`if` must live inside a `def`; assign the value
-   you want returned to `result`.
+   Discover what code-mode offers with `listToolFiles()`, then
+   `readToolFile(fileName="servers/<server>/<tool>.pyi")` to confirm parameters, and
+   `getToolDocs(server=..., tool=...)` for full docs. Note the parameter is
+   `fileName`, not `path`.
+
+   Starlark notes: **assign what you want back to `result`** or the call returns
+   nothing. `for`, `if`, list comprehensions and `print()` all work at top level.
+   Load the `bifrost-code-mode` skill for the full reference.
 
 If a `mcp__bifrost__<server>-<tool>` tool does not exist, the capability is almost
 certainly code-mode — do **not** give up; use `executeToolCode`.
 
-## Skill discovery — do this before non-trivial work
+## Skills, memory and tools
 
-**Before implementing, debugging, deploying, writing tests, reviewing, or setting
-up infra**, search the skill library. A match may handle the task outright or give
-a specialized procedure. The SessionStart injection shows the exact invocation and
-a live sample of the navigator domains for *your* gateway. Typical names:
+The sections below this one are generated per session from *your* gateway: the skill
+library and how to search it, the MCP tool roster, and the shared memory corpus with
+its live size. Use those exact invocations — they are discovered, not guessed.
 
-- `skill_search(query="<task>", k=5)` — search by intent.
-- `skill_navigate(node="<id>")` — browse the decision tree (omit `node` for root).
-- `get_skill(name="<skill>")` — load full instructions before following them.
-
-Skip only for single-line edits, file reads/grep, and clarifying questions.
-
-## Memory — recall before, store after (agent-driven)
-
-Memory is **not** silently auto-injected (the SessionStart hook primes a few
-salient facts, nothing more). You are responsible for using it during the session:
-
-- **Before non-trivial tasks:** `memory_search(query="<short query>", k=6)` to
-  recall past decisions, root causes, conventions, people, and project context.
-- **After significant work:** `memory_store(text="<durable fact>", tags="...",
-  room="...", salience=0.8)` — decisions made, root causes found, conventions and
-  gotchas learned. Exclude transient detail, secrets, and per-file noise.
-
-On a code-mode gateway both run through `executeToolCode`, e.g.
-`result = <memory-server>.memory_search(query="...", k=6)`. Confirm the server name
-and exact signature with `listToolFiles` / `readToolFile` if unsure.
-
-## Other capabilities
-
-Route capability requests through whatever the gateway exposes — issue tracker,
-error tracking, analytics, docs, web search — via flat tools or code-mode. When in
-doubt, `listToolFiles` first; don't guess tool names.
+If they are absent, discovery has not run yet (first session here, or the gateway was
+unreachable). In that case: `skill_search(query="<task>", k=5)` then
+`get_skill(name=...)` to find and load a skill; `memory_search(query="...", k=6)`
+before non-trivial work and `memory_store(text="...")` after it; `listToolFiles()` to
+see what else the gateway exposes. Confirm server names with `listToolFiles` rather
+than guessing.
 
 ## Onboarding / troubleshooting
 
