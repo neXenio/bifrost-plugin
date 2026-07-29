@@ -23,11 +23,101 @@ const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DISCOVERY_CACHE = path.join(CACHE_DIR, 'discovery.json');
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h — server topology rarely changes
 
-function env() {
-  return {
-    url: (process.env.BIFROST_URL || '').trim(),
-    vk: (process.env.BIFROST_VK || '').trim(),
+// Hook processes are separate OS processes and do NOT inherit Claude Code's MCP
+// credential. Installing with `claude mcp add` (which is what bin/install.js and
+// auto-setup.cjs do) writes the gateway URL and virtual key into ~/.claude.json as
+// MCP server config, never into the environment — so every env-only lookup here
+// came back empty and the whole hook layer went silently inert. Fall back to that
+// config when the environment does not carry the credential.
+//
+// We match on the x-bf-vk header rather than on the server key, because the server
+// may be registered under any name (user scope, plugin scope, `bifrost`, `bifrost-mcp`).
+// Values still holding an unexpanded ${VAR} placeholder are ignored — the plugin's
+// bundled .mcp.json ships exactly those, and they are not credentials.
+const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json');
+const UNEXPANDED_RE = /\$\{[^}]*\}/;
+
+// Memoized for the life of the process. ~/.claude.json also stores conversation
+// history, so it is routinely half a megabyte and can be several. session-start calls
+// env() three times, and re-parsing per call measurably slowed the startup path —
+// which is the property this hook is built around. Hook processes are short-lived, so
+// a process-lifetime cache cannot go stale in any way that matters.
+let mcpCredentialCache;
+
+function credentialFromMcpConfig() {
+  if (mcpCredentialCache !== undefined) return mcpCredentialCache;
+  mcpCredentialCache = readCredentialFromMcpConfig();
+  return mcpCredentialCache;
+}
+
+function readCredentialFromMcpConfig() {
+  let cfg;
+  try { cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { return null; }
+
+  const usable = (s) => {
+    if (!s || typeof s !== 'object') return null;
+    const vk = s.headers && typeof s.headers === 'object' ? s.headers['x-bf-vk'] : null;
+    const url = s.url;
+    if (typeof vk !== 'string' || typeof url !== 'string') return null;
+    if (!vk.trim() || !url.trim()) return null;
+    if (UNEXPANDED_RE.test(vk) || UNEXPANDED_RE.test(url)) return null;
+    return { url: url.trim(), vk: vk.trim() };
   };
+
+  // Prefer the canonical server name over object insertion order. A developer with a
+  // personal or staging gateway also registered would otherwise get whichever entry
+  // happened to be added first, and that ordering flips on any `claude mcp add`.
+  const fromMap = (servers) => {
+    if (!servers || typeof servers !== 'object') return null;
+    const canonical = usable(servers.bifrost);
+    if (canonical) return canonical;
+    for (const s of Object.values(servers)) {
+      const hit = usable(s);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  // Order matters: THIS project's own server, then user scope, then anything else.
+  // Iterating `Object.values(cfg.projects)` first would hand the current session an
+  // unrelated project's key in insertion order, and virtual keys carry role scope, so
+  // the agent would silently run under the wrong authorization.
+  const here = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  const projects = cfg.projects || {};
+
+  const mine = fromMap(projects[here] && projects[here].mcpServers);
+  if (mine) return mine;
+
+  const user = fromMap(cfg.mcpServers);
+  if (user) return user;
+
+  for (const [dir, proj] of Object.entries(projects)) {
+    if (dir === here) continue;
+    const hit = fromMap(proj && proj.mcpServers);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// A gateway URL and the key that authenticates to it are ONE credential. Resolving
+// them independently would let a stale `export BIFROST_URL=…` in a shell profile pair
+// with the key from ~/.claude.json and send that key to a host it was never issued
+// for — and this plugin already knows some users still export retired public tunnel
+// hostnames (see LEGACY_GATEWAY_ENDPOINTS), which are re-registrable by anyone. So:
+// take both from the environment, or both from the MCP config, never one of each.
+// A lone BIFROST_URL is ignored rather than combined.
+// Deliberately NOT filtered here: the endpoints in session-start's
+// LEGACY_GATEWAY_ENDPOINTS are documented as retired, but at least one still answers
+// with a valid MCP handshake and is somebody's configured gateway today. Refusing it
+// on this path would silently re-break their plugin. The migration notice advises;
+// it does not confiscate a working credential.
+function env() {
+  const url = (process.env.BIFROST_URL || '').trim();
+  const vk = (process.env.BIFROST_VK || '').trim();
+  if (url && vk) return { url, vk };
+  const cfg = credentialFromMcpConfig();
+  if (cfg) return cfg;
+  return { url: '', vk: '' };
 }
 
 // One JSON-RPC round-trip over Streamable HTTP. Resolves {status, body} or null.
@@ -117,12 +207,26 @@ async function discover(timeoutMs) {
   const flatTools = (flat && flat.result && flat.result.tools) || [];
   const flatNames = flatTools.map((t) => t.name);
 
+  // Flat names are `<server>-<tool>`, and BOTH halves may contain hyphens: servers
+  // like `team-memory`, and tools like `skill-search` (which the fallback patterns
+  // below deliberately accept). Neither the first hyphen nor the last is a reliable
+  // boundary, so do not guess one — locate the substring the pattern actually matched
+  // and treat everything before it as the server. Splitting on the first hyphen broke
+  // `team-memory-memory_search`; splitting on the last breaks `skills-skill-search`.
+  // Sorted, so a gateway exposing two skills or two memory servers resolves to the
+  // same one on every refresh. Unsorted it followed tools/list order, which the
+  // gateway does not promise to keep stable — the capability could silently switch
+  // servers between refreshes and nothing would report it.
+  const ordered = flatNames.slice().sort();
+
   const find = (re) => {
-    // Flat tool wins: callable directly as mcp__bifrost__<name>.
-    const flatHit = flatNames.find((n) => re.test(n));
-    if (flatHit) {
-      const server = flatHit.includes('-') ? flatHit.slice(0, flatHit.indexOf('-')) : flatHit;
-      return { server, mode: 'flat', tool: flatHit };
+    for (const name of ordered) {
+      const m = re.exec(name);
+      if (!m) continue;
+      const token = m[0].replace(/^[-_]/, '');       // patterns may capture a leading separator
+      const at = name.lastIndexOf(token);
+      const server = at > 0 ? name.slice(0, at).replace(/[-_]+$/, '') : '';
+      return { server, mode: 'flat', tool: name };
     }
     return null;
   };
@@ -130,8 +234,15 @@ async function discover(timeoutMs) {
   let skills = find(/skill_search$/i) || find(/skill[_-]?search/i);
   let memory = find(/memory_search$/i) || find(/(^|[-_])memory[_-]?search/i);
 
-  // Anything not flat may live behind the code-mode catalog (listToolFiles).
-  if ((!skills || !memory) && flatNames.includes('listToolFiles')) {
+  // Walk the code-mode catalog whenever the gateway offers one — NOT only when a
+  // capability is missing. The old guard `(!skills || !memory)` meant that on a
+  // gateway where both happen to be flat (the common case) the catalog was never
+  // fetched at all, so the entire code-mode surface stayed invisible: on a real
+  // deployment that measured 251 tools across 13 servers that no agent could see.
+  // The roster is VK-scoped — the gateway already omits tools this key may not
+  // call — so surfacing it discloses nothing the caller could not already reach.
+  const roster = {};
+  if (flatNames.includes('listToolFiles')) {
     const cat = parseBody((await rpc('tools/call', { name: 'listToolFiles', arguments: {} }, timeoutMs) || {}).body);
     const text = cat && cat.result && cat.result.content
       ? cat.result.content.map((c) => c.text || '').join('')
@@ -140,13 +251,20 @@ async function discover(timeoutMs) {
     let current = null;
     const codeServers = {}; // server -> Set(tool)
     for (const line of text.split(/\r?\n/)) {
-      const sm = line.match(/^\s{2}([A-Za-z0-9_-]+)\/\s*$/);
-      if (sm) { current = sm[1]; codeServers[current] = codeServers[current] || []; continue; }
+      // Any line that looks like a server header ends the previous server, even if its
+      // name fails the charset. Leaving `current` in place would silently donate the
+      // rejected server's tools to whichever server preceded it, inflating that count.
+      if (/\/\s*$/.test(line)) {
+        const sm = line.match(/^\s{2}([A-Za-z0-9_-]+)\/\s*$/);
+        current = sm ? sm[1] : null;
+        if (current) codeServers[current] = codeServers[current] || [];
+        continue;
+      }
       const tm = line.match(/^\s{3,}([A-Za-z0-9_]+)\.pyi\s*$/);
       if (tm && current) codeServers[current].push(tm[1]);
     }
     const findCode = (re) => {
-      for (const srv of Object.keys(codeServers)) {
+      for (const srv of Object.keys(codeServers).sort()) {
         const tool = codeServers[srv].find((t) => re.test(t));
         if (tool) return { server: srv, mode: 'code', tool };
       }
@@ -154,9 +272,15 @@ async function discover(timeoutMs) {
     };
     if (!skills) skills = findCode(/skill_search/i);
     if (!memory) memory = findCode(/memory_search/i);
+
+    // Keep the whole catalog, not just the two capabilities we came for. This is
+    // what session-start turns into the visible tool roster.
+    for (const [srv, tools] of Object.entries(codeServers)) {
+      if (tools.length) roster[srv] = tools;
+    }
   }
 
-  return { at: Date.now(), skills, memory };
+  return { at: Date.now(), skills, memory, roster };
 }
 
 // Cached discovery; refreshes if missing/stale. Returns discovery or null.
@@ -171,14 +295,28 @@ async function getCapabilities(timeoutMs, { refresh = false, cacheOnly = false }
   return disc || readCache(); // fall back to stale cache if the refresh failed
 }
 
+// Resolve the flat tool name to call. Exported so the hooks print exactly what they
+// would call, instead of composing the string a second time in a different place.
+function flatToolName(cap, toolFn) {
+  if (!cap) return toolFn;
+  // Compare with separators normalized: a gateway may advertise the same function as
+  // `skill-search` while callers name it `skill_search`. Without this the discovered
+  // tool is not recognized as itself and gets rebuilt into a name that does not exist.
+  const norm = (s) => String(s).replace(/[-_]/g, '_');
+  if (cap.tool && new RegExp(`(^|_)${norm(toolFn)}$`).test(norm(cap.tool))) return cap.tool;
+  return cap.server ? `${cap.server}-${toolFn}` : toolFn;
+}
+
 // Call a discovered capability (flat or code-mode). Returns parsed text or null.
 async function callCapability(cap, toolFn, args, timeoutMs) {
   if (!cap) return null;
   let resp;
   if (cap.mode === 'flat') {
-    // Flat tools are <server>-<tool>; derive the sibling tool from toolFn so the
-    // same cap can call skill_search, skill_navigate, get_skill, etc.
-    const name = `${cap.server}-${toolFn}`;
+    // For the tool we actually discovered, use the name the gateway advertised
+    // verbatim — it is known-good, whereas anything we reassemble is a guess. Only
+    // siblings (skill_navigate, get_skill, memory_store, …) are built from the server
+    // prefix, and a gateway exposing a bare tool with no prefix is called directly.
+    const name = flatToolName(cap, toolFn);
     resp = await rpc('tools/call', { name, arguments: args }, timeoutMs);
   } else {
     const kv = Object.entries(args)
@@ -192,4 +330,30 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
   return parsed.result.content.map((c) => c.text || '').join('\n');
 }
 
-module.exports = { env, getCapabilities, callCapability, DISCOVERY_CACHE };
+// Synchronous, network-free read of the discovery cache. SessionStart needs the
+// roster while staying fully synchronous (it exits the process immediately, so a
+// promise would never settle).
+// `maxAgeMs` is the caller's EMIT tolerance — how old content may be and still be
+// worth showing. That is a different question from DISCOVERY_TTL_MS, which decides
+// when to re-fetch over the network. Conflating them made the roster disappear from
+// any session starting more than an hour after the last refresh, while skills and
+// memory (24h tolerance) stayed: the roster silently went missing far more often than
+// it appeared. Callers pass the tolerance that matches what they are emitting; an
+// unbounded read is not offered, because that is what let a permanently dead gateway
+// inject a roster of arbitrary age.
+function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
+  const c = readCache();
+  if (!c || !Number.isFinite(maxAgeMs) || now - c.at >= maxAgeMs) return null;
+  return c;
+}
+
+module.exports = {
+  env,
+  getCapabilities,
+  callCapability,
+  readDiscoveryCacheSync,
+  credentialFromMcpConfig,
+  flatToolName,
+  discover,
+  DISCOVERY_CACHE,
+};
