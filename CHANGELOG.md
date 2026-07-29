@@ -4,6 +4,25 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-07-29
+
+### Fixed
+
+- **Detect and report the MCP server-name collision between the two install methods.**
+  Both documented paths register a server named `bifrost`: the plugin's bundled
+  `.mcp.json` (using `${BIFROST_URL}`) and `claude mcp add`. Claude Code keys servers
+  by name within a scope, so with both present the project entry cannot expand its
+  placeholder and `mcp__bifrost__*` tools disappear in any directory carrying that
+  `.mcp.json` — while `claude mcp list` still shows a connected `bifrost`. It reads as
+  a gateway outage when the gateway is fine.
+
+  The asymmetry made it worse: the hooks are unaffected, because they read the
+  credential from `~/.claude.json` directly, so skills, memory and the tool roster keep
+  working while the MCP tools are gone.
+
+  SessionStart now names the collision and both fixes. `INSTALL.md` states the methods
+  are mutually exclusive, and `bifrost-debug` gains a section for the symptom.
+
 ## [1.4.0] — 2026-07-29
 
 ### Changed — open-source readiness

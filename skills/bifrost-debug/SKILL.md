@@ -144,3 +144,29 @@ triggered it. A check-in fired by the final turn of a session is never delivered
 Findings land in `.bifrost/candidates.md` in the project root, git-ignored. Review
 them with `/bifrost-candidates`. If that file is missing, nothing has been recorded
 in this project yet — that is not a fault.
+
+## `mcp__bifrost__*` tools missing, but `claude mcp list` says connected
+
+Almost always a **server-name collision**, not a gateway fault. Both install methods
+register a server named `bifrost`: the plugin's bundled `.mcp.json` (using
+`${BIFROST_URL}`) and `claude mcp add`. With both present, the project entry cannot
+expand and the name resolves to nothing usable — so the tools vanish in any directory
+containing that `.mcp.json`, while a connected `bifrost` still appears in the list.
+
+Confirm:
+
+```
+claude mcp list | grep -i bifrost
+```
+
+A line reading `Missing environment variables: BIFROST_URL` alongside a connected
+entry at a real URL is the collision. SessionStart also emits an explicit notice.
+
+Fix, either one:
+
+- `export BIFROST_URL=… BIFROST_VK=…` so the project entry resolves, or
+- `claude mcp remove bifrost -s user` and let the plugin's entry own the name.
+
+Note the hooks are **unaffected** either way — they read the credential from
+`~/.claude.json` directly, so skills, memory and the tool roster keep working even
+while the MCP tools are missing. That asymmetry is what makes this confusing.

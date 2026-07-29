@@ -330,6 +330,45 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
   return parsed.result.content.map((c) => c.text || '').join('\n');
 }
 
+// Detect an MCP server-name collision between a project's .mcp.json and the user's
+// own registration.
+//
+// Claude Code keys MCP servers by name per scope. If a project ships `.mcp.json`
+// declaring `bifrost` with `${BIFROST_URL}` and the user has separately run
+// `claude mcp add … bifrost` pointing at a real endpoint, the two collide: the
+// project entry cannot expand, and `mcp__bifrost__*` stops being exposed. Nothing
+// reports this — the tools are simply absent, which reads as "the gateway is down".
+//
+// Returns { name, userUrl } for the first colliding server, or null.
+function detectServerNameCollision() {
+  const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  if (!dir) return null;
+
+  let project;
+  try { project = JSON.parse(fs.readFileSync(path.join(dir, '.mcp.json'), 'utf8')); } catch (_) { return null; }
+  const projectServers = (project && project.mcpServers) || {};
+
+  let user;
+  try { user = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { return null; }
+  const userServers = (user && user.mcpServers) || {};
+
+  for (const [name, entry] of Object.entries(projectServers)) {
+    const mine = userServers[name];
+    if (!mine || typeof mine.url !== 'string') continue;
+
+    // Only a problem when the project entry cannot resolve: a placeholder with no
+    // matching environment variable. If both sides resolve to the same endpoint
+    // there is nothing to report.
+    const url = entry && typeof entry.url === 'string' ? entry.url : '';
+    const unresolved = UNEXPANDED_RE.test(url)
+      && !(url.replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '').trim());
+    if (!unresolved) continue;
+
+    return { name, userUrl: mine.url };
+  }
+  return null;
+}
+
 // Synchronous, network-free read of the discovery cache. SessionStart needs the
 // roster while staying fully synchronous (it exits the process immediately, so a
 // promise would never settle).
@@ -353,6 +392,7 @@ module.exports = {
   callCapability,
   readDiscoveryCacheSync,
   credentialFromMcpConfig,
+  detectServerNameCollision,
   flatToolName,
   discover,
   DISCOVERY_CACHE,

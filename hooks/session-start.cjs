@@ -486,6 +486,24 @@ function emitConfigNotice() {
 // had never once authenticated looked identical to a healthy one: the static guidance
 // still printed, so nothing appeared wrong while skills, memory and the tool roster
 // were all absent. One line, only when something is actually broken.
+// A server-name collision removes the gateway's tools from the session entirely, and
+// nothing else reports it: `mcp__bifrost__*` is simply absent, which reads as "the
+// gateway is down" and sends people debugging the wrong thing. Say it plainly.
+function emitCollisionNotice() {
+  let c = null;
+  try { c = gw.detectServerNameCollision(); } catch (_) { return; }
+  if (!c) return;
+  process.stdout.write(
+    `\n⚠️ MCP server-name collision: this project's \`.mcp.json\` declares ` +
+    `\`${c.name}\` with an unset placeholder, and you also have \`${c.name}\` ` +
+    `registered at \`${safeUrl(c.userUrl)}\`. Claude Code keys servers by name, so ` +
+    `\`mcp__${c.name}__*\` tools are unavailable in this directory. Fix by either ` +
+    `exporting the environment variables the project entry expects, or running ` +
+    `\`claude mcp remove ${c.name} -s user\` and letting the project entry own the ` +
+    'name. The hooks themselves are unaffected — they read the credential directly.\n'
+  );
+}
+
 function emitStaleNotice(file, cache, disc) {
   const { url, vk } = gw.env();
   if (!url || !vk) {
@@ -585,6 +603,7 @@ function main() {
     try { emitKb(cache, cfg); } catch (_) {}
     try { emitConfigNotice(); } catch (_) {}
     try { emitStaleNotice(file, cache, disc); } catch (_) {}
+    try { emitCollisionNotice(); } catch (_) {}
     spawnRefresh(file);
   } catch (_) { /* silent-fail — never block session start */ }
   exitWhenFlushed();

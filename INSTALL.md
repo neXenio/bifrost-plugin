@@ -31,6 +31,16 @@ Run `/bifrost-setup` to verify.
 
 ## Method 2 — `claude mcp add` (no plugin, MCP server only)
 
+> **Pick one method, not both.** Claude Code keys MCP servers by name within a scope,
+> and both methods register a server called `bifrost`. Run both and the two collide:
+> the project entry cannot expand its `${BIFROST_URL}` placeholder, and
+> `mcp__bifrost__*` tools disappear in any directory carrying the plugin's
+> `.mcp.json` — while `claude mcp list` still shows a connected `bifrost`, so it looks
+> like the gateway is down when it is not. SessionStart detects this and says so.
+>
+> Already in that state? Either export `BIFROST_URL`/`BIFROST_VK` so the project entry
+> resolves, or `claude mcp remove bifrost -s user` and let the plugin own the name.
+
 If you only want the gateway MCP server without the plugin's hooks and skills:
 
 ```bash

@@ -1405,3 +1405,48 @@ test('no private key material ships in the package', () => {
     }
   }
 });
+
+test('a server-name collision is detected and reported, not left silent', () => {
+  // Both documented install methods register a server named `bifrost`. With both
+  // present the project entry cannot expand and mcp__bifrost__* disappears, while
+  // `claude mcp list` still shows a connected bifrost — so it reads as a gateway
+  // outage. This cost real debugging time; the plugin should just say it.
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-collide-'));
+  fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: '${BIFROST_URL}', headers: { 'x-bf-vk': '${BIFROST_VK}' } } },
+  }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: 'https://real.example/mcp', headers: { 'x-bf-vk': 'VK' } } },
+  }));
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '' }, home);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+  assert.match(r.stdout, /claude mcp remove bifrost -s user/);
+});
+
+test('no collision is reported when the project entry resolves', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-ok-'));
+  fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: '${BIFROST_URL}', headers: { 'x-bf-vk': '${BIFROST_VK}' } } },
+  }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: 'https://real.example/mcp', headers: { 'x-bf-vk': 'VK' } } },
+  }));
+  // Environment supplies the placeholder, so both sides resolve — nothing to report.
+  const r = runSessionStart({
+    CLAUDE_PROJECT_DIR: proj, BIFROST_URL: 'https://real.example/mcp', BIFROST_VK: 'VK',
+  }, home);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a project with no .mcp.json never reports a collision', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-none-'));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: 'https://real.example/mcp', headers: { 'x-bf-vk': 'VK' } } },
+  }));
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '' }, home);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
