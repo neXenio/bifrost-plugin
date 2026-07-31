@@ -40,7 +40,22 @@ function snapshotRepoStatePath(full) {
   })(full, '');
   return { exists: true, isDir: true, entries };
 }
-const REPO_STATE_GUARD = ['.bifrost', 'candidates.md', 'usage.json'].map((stray) => {
+// The watched set is derived from what the code actually writes, not from what a stray
+// file would plausibly be called. Every write target in hooks/ is one of two shapes:
+//
+//   ~/.cache/bifrost-plugin/**        usage.json, discovery.json, inject-*.json, the
+//                                     reflect markers, the plugin-config cache
+//   <projectDir>/.bifrost/**          candidates.md and its .gitignore
+//
+// So the two ways a hook lands inside this repository are HOME pointing here (which
+// gives ROOT/.cache/…, NOT ROOT/usage.json) and cwd/CLAUDE_PROJECT_DIR pointing here
+// (which gives ROOT/.bifrost/…, NOT ROOT/candidates.md). The earlier set watched the
+// two bare root filenames, which no code path can produce under either confusion — it
+// read as broader coverage than it had, and the HOME case it was written to commemorate
+// went unwatched. `.claude` is the one entry not derived from a plugin write: nothing in
+// hooks/ creates it, but a suite that ever shells out to a real `claude` binary would
+// get ROOT/.claude/settings.local.json, and that is the same class of accident.
+const REPO_STATE_GUARD = ['.bifrost', '.cache', '.claude'].map((stray) => {
   const full = path.join(ROOT, stray);
   return { stray, full, before: snapshotRepoStatePath(full) };
 });
