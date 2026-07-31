@@ -1502,3 +1502,87 @@ test('a project with no .mcp.json never reports a collision', () => {
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '' }, home);
   assert.doesNotMatch(r.stdout, /server-name collision/i);
 });
+
+// The detector's own comment promised "if both sides resolve to the same endpoint there
+// is nothing to report", but it only ever asked whether the project entry expanded to
+// something non-empty and never compared the two urls. So BIFROST_URL=https://A against
+// a user-scope `bifrost` at https://B returned null: no report, while the user-scope
+// entry wins and the session silently answers from B. Nothing else in a session hints
+// at that — the tools are all present and working, against the wrong corpus.
+
+function collisionFixture(projectUrl, userUrl) {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-collide-'));
+  fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: '${BIFROST_URL}', headers: { 'x-bf-vk': '${BIFROST_VK}' } } },
+  }));
+  if (userUrl) {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { bifrost: { type: 'http', url: userUrl, headers: { 'x-bf-vk': 'VK' } } },
+    }));
+  } else {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: {} }));
+  }
+  return runSessionStart({
+    CLAUDE_PROJECT_DIR: proj, BIFROST_URL: projectUrl, BIFROST_VK: 'VK',
+  }, home);
+}
+
+test('two entries resolving to DIFFERENT endpoints are reported', () => {
+  const r = collisionFixture('https://project-gateway.example/mcp', 'https://user-gateway.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+  // Naming only one side would leave the reader unable to tell which one they are
+  // actually reaching, which is the entire question this notice has to answer.
+  assert.match(r.stdout, /project-gateway\.example/, 'the declared endpoint must be named');
+  assert.match(r.stdout, /user-gateway\.example/, 'the endpoint actually in use must be named');
+  assert.match(r.stdout, /claude mcp remove bifrost -s user/);
+});
+
+test('two entries resolving to the SAME endpoint are not reported', () => {
+  const r = collisionFixture('https://same.example/mcp', 'https://same.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a trailing slash or a cased host is not a different endpoint', () => {
+  // Both spellings reach one server, so reporting them would train people to ignore
+  // the notice — which costs more than the case it would catch.
+  const r = collisionFixture('https://Same.Example/mcp/', 'https://same.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a different PATH on the same host is still a collision', () => {
+  // Only the parts an HTTP client ignores are folded away; a route is not one of them.
+  const r = collisionFixture('https://same.example/mcp', 'https://same.example/other-mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+});
+
+test('an unresolvable placeholder is still reported', () => {
+  // The pre-existing behaviour: no user-supplied value, so the project entry cannot
+  // expand at all and the tools disappear outright.
+  const r = collisionFixture('', 'https://user-gateway.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+  assert.match(r.stdout, /unset placeholder/i, 'the unresolved case must keep its own wording');
+});
+
+test('no user-scope entry at all means no collision', () => {
+  // Nothing to collide with — the project entry owns the name outright.
+  const r = collisionFixture('https://project-gateway.example/mcp', null);
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('sameEndpoint never calls an unparseable string equal to a real url', () => {
+  assert.ok(gw.sameEndpoint('https://h/mcp', 'https://h/mcp/'));
+  assert.ok(gw.sameEndpoint('https://H/mcp', 'https://h/mcp'));
+  assert.ok(gw.sameEndpoint('https://h:443/mcp', 'https://h/mcp'));
+  assert.ok(gw.sameEndpoint('https://h/mcp#frag', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('https://h/mcp?k=1', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('http://h/mcp', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('not a url', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('', 'https://h/mcp'));
+});
