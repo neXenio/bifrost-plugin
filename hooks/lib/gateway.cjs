@@ -330,16 +330,63 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
   return parsed.result.content.map((c) => c.text || '').join('\n');
 }
 
+// Two URLs name the same endpoint when they differ only in ways an HTTP client would
+// ignore anyway. The normalization is deliberately narrow, and this is the whole of it:
+//
+//   - scheme and host are case-insensitive, and a default port is not a difference.
+//     `new URL` already folds both, so this falls out of parsing rather than being
+//     hand-rolled.
+//   - one or more trailing slashes on the path are not a difference: `…/mcp` and
+//     `…/mcp/` are one endpoint.
+//   - a fragment is not sent to the server, so it is dropped.
+//
+// Everything else — the path itself, the query string, embedded userinfo — is compared
+// verbatim. A gateway may legitimately encode a route or a credential there, so folding
+// those away would suppress a genuine collision. A string that will not parse as a URL
+// is compared trimmed and literally; it is never declared equal to something it does
+// not match, because "unparseable" is not evidence of sameness.
+// Substitute ${VAR} from the environment. An unset variable collapses to empty rather
+// than staying literal, so a caller can tell "did not expand" from "expanded to nothing"
+// by testing the raw string against UNEXPANDED_RE.
+function expandVars(raw) {
+  return String(raw == null ? '' : raw).trim()
+    .replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '')
+    .trim();
+}
+
+function sameEndpoint(a, b) {
+  const norm = (raw) => {
+    const s = String(raw == null ? '' : raw).trim();
+    try {
+      const u = new URL(s);
+      u.hash = '';
+      return u.href.replace(/\/+$/, '');
+    } catch (_) {
+      return s.replace(/\/+$/, '');
+    }
+  };
+  return norm(a) === norm(b);
+}
+
 // Detect an MCP server-name collision between a project's .mcp.json and the user's
 // own registration.
 //
-// Claude Code keys MCP servers by name per scope. If a project ships `.mcp.json`
-// declaring `bifrost` with `${BIFROST_URL}` and the user has separately run
-// `claude mcp add … bifrost` pointing at a real endpoint, the two collide: the
-// project entry cannot expand, and `mcp__bifrost__*` stops being exposed. Nothing
-// reports this — the tools are simply absent, which reads as "the gateway is down".
+// Claude Code keys MCP servers by name per scope, and the user-scope entry wins. Two
+// distinct failures come out of that, and both are silent:
 //
-// Returns { name, userUrl } for the first colliding server, or null.
+//   1. The project ships `.mcp.json` declaring `bifrost` with `${BIFROST_URL}`, the
+//      variable is unset, and the user has separately run `claude mcp add … bifrost`.
+//      The project entry cannot expand and `mcp__bifrost__*` stops being exposed —
+//      the tools are simply absent, which reads as "the gateway is down".
+//   2. Both entries resolve, but to DIFFERENT endpoints. Nothing disappears, so
+//      nothing looks wrong at all; the session just talks to the user-scope gateway
+//      while the project believes it is talking to its own. This is the worse of the
+//      two, because the only symptom is answers sourced from the wrong corpus.
+//
+// If both sides resolve to the same endpoint there is nothing to report.
+//
+// Returns { name, reason: 'unresolved' | 'divergent', projectUrl, userUrl } for the
+// first colliding server, or null.
 function detectServerNameCollision() {
   const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
   if (!dir) return null;
@@ -356,15 +403,28 @@ function detectServerNameCollision() {
     const mine = userServers[name];
     if (!mine || typeof mine.url !== 'string') continue;
 
-    // Only a problem when the project entry cannot resolve: a placeholder with no
-    // matching environment variable. If both sides resolve to the same endpoint
-    // there is nothing to report.
-    const url = entry && typeof entry.url === 'string' ? entry.url : '';
-    const unresolved = UNEXPANDED_RE.test(url)
-      && !(url.replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '').trim());
-    if (!unresolved) continue;
+    // An entry with no url of its own (a stdio `command` server, say) gives nothing to
+    // compare against, so there is no claim to make about it either way.
+    const raw = entry && typeof entry.url === 'string' ? entry.url.trim() : '';
+    if (!raw) continue;
 
-    return { name, userUrl: mine.url };
+    // Both sides have to be expanded before they are comparable. `claude mcp add` writes
+    // a literal, but a user-scope entry may equally hold `${BIFROST_URL}` — that is the
+    // shape you get after deliberately collapsing the key to a single source, and it is
+    // the SAME endpoint as the project entry, not a divergent one. Expanding only the
+    // project side compared a resolved url against the raw string "${BIFROST_URL}" and
+    // reported a divergence on every session.
+    const rawUser = mine.url.trim();
+    const expanded = expandVars(raw);
+    const expandedUser = expandVars(rawUser);
+
+    // Either side failing to expand is the vanishing-tools case: the project entry has
+    // no endpoint, or the user entry that wins the name has none.
+    if ((UNEXPANDED_RE.test(raw) && !expanded) || (UNEXPANDED_RE.test(rawUser) && !expandedUser)) {
+      return { name, reason: 'unresolved', projectUrl: expanded, userUrl: expandedUser || rawUser };
+    }
+    if (sameEndpoint(expanded, expandedUser)) continue;
+    return { name, reason: 'divergent', projectUrl: expanded, userUrl: expandedUser };
   }
   return null;
 }
@@ -393,6 +453,7 @@ module.exports = {
   readDiscoveryCacheSync,
   credentialFromMcpConfig,
   detectServerNameCollision,
+  sameEndpoint,
   flatToolName,
   discover,
   DISCOVERY_CACHE,

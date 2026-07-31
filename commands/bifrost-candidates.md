@@ -14,12 +14,14 @@ reader.
 
 ## Why this step exists
 
-The shared corpus has no review filter on reads: `memory_search` takes `query`, `k`,
-`tier`, `wing`, `room`, `agent_id`, `conversation_id`, `include_expired`, `detail` and
-`fast` — and no tag or state filter. So anything written to it is recalled by every
-colleague immediately, as settled team knowledge. Combined with a corpus that has never
-recorded a correction, a wrong entry is effectively permanent. Promotion is therefore a
-human decision, not an automatic one.
+The shared corpus has no read permission model. `memory_search` does take filters —
+`wing`, `room`, `tier`, `agent_id`, `conversation_id`, `include_expired` — but every one
+of them is the caller's own retrieval narrowing, chosen per query and dropped just as
+easily on the next one. Nothing a writer can set keeps an entry away from a reader. So
+anything written to the corpus is recalled by every colleague immediately, as settled
+team knowledge. Combined with correction machinery that exists but has never once been
+used, a wrong entry is effectively permanent. Promotion is therefore a human decision,
+not an automatic one.
 
 ## Procedure
 
@@ -39,6 +41,8 @@ finding often gets recorded by more than one session.
 - **Safe to share?** No secrets, credentials, customer or personal data. Everything
   promoted is recalled into colleagues' prompts and therefore sent to the model
   provider — treat it as publishing to the whole company.
+  Run the classification check in `guidance/memory-classification.md` before promoting
+  anything. First failing gate decides; when unsure, leave it in the spool.
 
 **4. Present your recommendation** as keep / drop / needs-editing, with one line of
 reasoning each. **Ask the user to confirm before promoting anything.** Do not promote

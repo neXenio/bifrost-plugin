@@ -16,6 +16,60 @@ const ROOT = path.join(__dirname, '..');
 const gw = require('../hooks/lib/gateway.cjs');
 const { budgetFill } = require('../hooks/refresh.cjs');
 
+// This plugin's own repo is also a real working project: a genuine Claude Code
+// session running here legitimately creates `.bifrost/candidates.md` via the session
+// hooks. That is correct behaviour, not pollution, and `.bifrost/.gitignore` (`*`)
+// keeps git clean regardless. So the "suite never writes into the plugin repository
+// itself" guard below can't assert absence — it has to detect that THE SUITE created
+// or modified these paths. Snapshot what is there before any test runs (module load
+// happens synchronously, before node:test executes the first registered test — see
+// the guard test itself for the invariant this depends on).
+function snapshotRepoStatePath(full) {
+  let st;
+  try { st = fs.statSync(full); } catch (_) { return { exists: false }; }
+  if (!st.isDirectory()) return { exists: true, isDir: false, mtimeMs: st.mtimeMs };
+  const entries = new Map();
+  (function walk(dir, rel) {
+    for (const name of fs.readdirSync(dir)) {
+      const abs = path.join(dir, name);
+      const relPath = rel ? path.join(rel, name) : name;
+      const s = fs.statSync(abs);
+      if (s.isDirectory()) walk(abs, relPath);
+      else entries.set(relPath, s.mtimeMs);
+    }
+  })(full, '');
+  return { exists: true, isDir: true, entries };
+}
+// The watched set is derived from what the code actually writes, not from what a stray
+// file would plausibly be called. Every write target in hooks/ is one of two shapes:
+//
+//   ~/.cache/bifrost-plugin/**        usage.json, discovery.json, inject-*.json, the
+//                                     reflect markers, the plugin-config cache
+//   <projectDir>/.bifrost/**          candidates.md and its .gitignore
+//
+// So the two ways a hook lands inside this repository are HOME pointing here (which
+// gives ROOT/.cache/…, NOT ROOT/usage.json) and cwd/CLAUDE_PROJECT_DIR pointing here
+// (which gives ROOT/.bifrost/…, NOT ROOT/candidates.md). The earlier set watched the
+// two bare root filenames, which no code path can produce under either confusion — it
+// read as broader coverage than it had, and the HOME case it was written to commemorate
+// went unwatched. `.claude` is the one entry not derived from a plugin write: nothing in
+// hooks/ creates it, but a suite that ever shells out to a real `claude` binary would
+// get ROOT/.claude/settings.local.json, and that is the same class of accident.
+//
+// LIMITATION, stated so nobody over-trusts this: `npm test` runs each test FILE in its
+// own process, in parallel. This guard only sees writes made by THIS process and by the
+// hooks THIS file spawns. compat.test.cjs spawns real hooks with cwd = the repo root
+// and, at several call sites, no CLAUDE_PROJECT_DIR — so the process.cwd() fallback
+// applies there. A write from that sibling process is invisible here, and one landing
+// before this file's module load is snapshotted as pre-existing and passes silently.
+// Not a live problem (a clean checkout has no .bifrost and `git status` stays clean),
+// and worth neither serializing the suite nor a lock file — but the guard proves less
+// than "the suite wrote nothing", and its failure is the only signal, never its pass.
+const REPO_STATE_GUARD = ['.bifrost', '.cache', '.claude'].map((stray) => {
+  const full = path.join(ROOT, stray);
+  return { stray, full, before: snapshotRepoStatePath(full) };
+});
+
 // --- Group 1: flat tool name -> server derivation -------------------------------
 // Driven through the REAL discover() against a loopback MCP stub. An earlier version
 // of these tests re-implemented the derivation inside the test file, so reverting the
@@ -864,11 +918,11 @@ test('the emitted payload is valid JSON in the additionalContext shape', () => {
 });
 
 test('candidates go to a LOCAL file, never straight into shared memory', () => {
-  // memory_search exposes no tag/state filter (query, k, tier, wing, room, agent_id,
-  // conversation_id, include_expired, detail, fast), so anything stored in the corpus
-  // is recalled by every colleague immediately. A `candidate` tag would label nothing
-  // for the reader and gate nothing. A local file is the only place a candidate is
-  // verifiably not recalled.
+  // memory_search's filters (wing, room, tier, agent_id, conversation_id,
+  // include_expired) are the caller's retrieval narrowing, not a read ACL — the next
+  // caller simply omits them — so anything stored in the corpus is recalled by every
+  // colleague immediately. A `candidate` tag would label nothing for the reader and
+  // gate nothing. A local file is the only place a candidate is verifiably not recalled.
   const caps = {
     memory: { server: 'teammemory', mode: 'flat', tool: 'teammemory-memory_search' },
     skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
@@ -1331,9 +1385,32 @@ test('the suite never writes into the plugin repository itself', () => {
   // ~/.cache (deleting a developer's live session markers), once to <repo>/.bifrost
   // because a spawned hook without CLAUDE_PROJECT_DIR falls back to process.cwd().
   // Both were found by hand. This makes the third instance fail the run instead.
-  for (const stray of ['.bifrost', 'candidates.md', 'usage.json']) {
-    assert.ok(!fs.existsSync(path.join(ROOT, stray)),
-      `${stray} was created in the repo — a hook ran with cwd or HOME pointing here`);
+  //
+  // A real session working in this repo legitimately leaves `.bifrost/candidates.md`
+  // behind, so "does it exist" is the wrong question — compare against the snapshot
+  // taken at module load, before any test ran, and fail on anything THIS RUN created
+  // or modified.
+  for (const { stray, full, before } of REPO_STATE_GUARD) {
+    const after = snapshotRepoStatePath(full);
+    if (!before.exists) {
+      assert.ok(!after.exists,
+        `${stray} was created in the repo during this run — a hook ran with cwd or HOME pointing here`);
+      continue;
+    }
+    assert.ok(after.exists && after.isDir === before.isDir,
+      `${stray} was removed or replaced during this run`);
+    if (!before.isDir) {
+      assert.strictEqual(after.mtimeMs, before.mtimeMs, `${stray} was modified during this run`);
+      continue;
+    }
+    const beforeKeys = [...before.entries.keys()].sort();
+    const afterKeys = [...after.entries.keys()].sort();
+    assert.deepStrictEqual(afterKeys, beforeKeys,
+      `${stray} gained or lost files during this run — a hook wrote into it`);
+    for (const key of beforeKeys) {
+      assert.strictEqual(after.entries.get(key), before.entries.get(key),
+        `${stray}/${key} was modified during this run`);
+    }
   }
 });
 
@@ -1449,4 +1526,106 @@ test('a project with no .mcp.json never reports a collision', () => {
   }));
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '' }, home);
   assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+// The detector's own comment promised "if both sides resolve to the same endpoint there
+// is nothing to report", but it only ever asked whether the project entry expanded to
+// something non-empty and never compared the two urls. So BIFROST_URL=https://A against
+// a user-scope `bifrost` at https://B returned null: no report, while the user-scope
+// entry wins and the session silently answers from B. Nothing else in a session hints
+// at that — the tools are all present and working, against the wrong corpus.
+
+function collisionFixture(projectUrl, userUrl) {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-collide-'));
+  fs.writeFileSync(path.join(proj, '.mcp.json'), JSON.stringify({
+    mcpServers: { bifrost: { type: 'http', url: '${BIFROST_URL}', headers: { 'x-bf-vk': '${BIFROST_VK}' } } },
+  }));
+  if (userUrl) {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { bifrost: { type: 'http', url: userUrl, headers: { 'x-bf-vk': 'VK' } } },
+    }));
+  } else {
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: {} }));
+  }
+  return runSessionStart({
+    CLAUDE_PROJECT_DIR: proj, BIFROST_URL: projectUrl, BIFROST_VK: 'VK',
+  }, home);
+}
+
+test('two entries resolving to DIFFERENT endpoints are reported', () => {
+  const r = collisionFixture('https://project-gateway.example/mcp', 'https://user-gateway.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+  // Naming only one side would leave the reader unable to tell which one they are
+  // actually reaching, which is the entire question this notice has to answer.
+  assert.match(r.stdout, /project-gateway\.example/, 'the declared endpoint must be named');
+  assert.match(r.stdout, /user-gateway\.example/, 'the endpoint actually in use must be named');
+  assert.match(r.stdout, /claude mcp remove bifrost -s user/);
+});
+
+test('two entries resolving to the SAME endpoint are not reported', () => {
+  const r = collisionFixture('https://same.example/mcp', 'https://same.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a trailing slash or a cased host is not a different endpoint', () => {
+  // Both spellings reach one server, so reporting them would train people to ignore
+  // the notice — which costs more than the case it would catch.
+  const r = collisionFixture('https://Same.Example/mcp/', 'https://same.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a different PATH on the same host is still a collision', () => {
+  // Only the parts an HTTP client ignores are folded away; a route is not one of them.
+  const r = collisionFixture('https://same.example/mcp', 'https://same.example/other-mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+});
+
+test('an unresolvable placeholder is still reported', () => {
+  // The pre-existing behaviour: no user-supplied value, so the project entry cannot
+  // expand at all and the tools disappear outright.
+  const r = collisionFixture('', 'https://user-gateway.example/mcp');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+  assert.match(r.stdout, /unset placeholder/i, 'the unresolved case must keep its own wording');
+});
+
+test('a user-scope entry holding the same placeholder is not a collision', () => {
+  // Collapsing the gateway key to a single source leaves the user-scope entry holding
+  // `${BIFROST_URL}` rather than a literal. Both entries then name the SAME endpoint.
+  // Expanding only the project side compared a resolved url against the raw string
+  // "${BIFROST_URL}", called them divergent, and fired the notice every single session.
+  const r = collisionFixture('https://same.example/mcp', '${BIFROST_URL}');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a user-scope placeholder that cannot expand is reported, not silently compared', () => {
+  // The user entry wins the name, so if IT has no endpoint the tools are gone — the same
+  // failure as an unresolvable project entry, and it must not read as "same endpoint".
+  const r = collisionFixture('https://same.example/mcp', '${BIFROST_UNSET_XYZ}');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+});
+
+test('no user-scope entry at all means no collision', () => {
+  // Nothing to collide with — the project entry owns the name outright.
+  const r = collisionFixture('https://project-gateway.example/mcp', null);
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('sameEndpoint never calls an unparseable string equal to a real url', () => {
+  assert.ok(gw.sameEndpoint('https://h/mcp', 'https://h/mcp/'));
+  assert.ok(gw.sameEndpoint('https://H/mcp', 'https://h/mcp'));
+  assert.ok(gw.sameEndpoint('https://h:443/mcp', 'https://h/mcp'));
+  assert.ok(gw.sameEndpoint('https://h/mcp#frag', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('https://h/mcp?k=1', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('http://h/mcp', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('not a url', 'https://h/mcp'));
+  assert.ok(!gw.sameEndpoint('', 'https://h/mcp'));
 });

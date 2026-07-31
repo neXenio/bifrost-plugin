@@ -489,10 +489,28 @@ function emitConfigNotice() {
 // A server-name collision removes the gateway's tools from the session entirely, and
 // nothing else reports it: `mcp__bifrost__*` is simply absent, which reads as "the
 // gateway is down" and sends people debugging the wrong thing. Say it plainly.
+// Two shapes, because the two failures look nothing alike to the person reading this.
+// `unresolved` is "the tools vanished"; `divergent` is "the tools are all there and
+// answering from the wrong gateway", which nothing else in the session would ever hint
+// at, so the notice has to name both endpoints.
 function emitCollisionNotice() {
   let c = null;
   try { c = gw.detectServerNameCollision(); } catch (_) { return; }
   if (!c) return;
+  const fix =
+    `Fix by either pointing both entries at the same endpoint, or running ` +
+    `\`claude mcp remove ${c.name} -s user\` and letting the project entry own the ` +
+    'name. The hooks themselves are unaffected — they read the credential directly.\n';
+  if (c.reason === 'divergent') {
+    process.stdout.write(
+      `\n⚠️ MCP server-name collision: this project's \`.mcp.json\` declares ` +
+      `\`${c.name}\` at \`${safeUrl(c.projectUrl)}\`, and you also have \`${c.name}\` ` +
+      `registered at \`${safeUrl(c.userUrl)}\`. Claude Code keys servers by name and ` +
+      `the user-scope entry wins, so \`mcp__${c.name}__*\` in this directory reaches ` +
+      `\`${safeUrl(c.userUrl)}\` — not the endpoint this project declares. ` + fix
+    );
+    return;
+  }
   process.stdout.write(
     `\n⚠️ MCP server-name collision: this project's \`.mcp.json\` declares ` +
     `\`${c.name}\` with an unset placeholder, and you also have \`${c.name}\` ` +
