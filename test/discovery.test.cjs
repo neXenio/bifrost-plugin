@@ -1594,6 +1594,24 @@ test('an unresolvable placeholder is still reported', () => {
   assert.match(r.stdout, /unset placeholder/i, 'the unresolved case must keep its own wording');
 });
 
+test('a user-scope entry holding the same placeholder is not a collision', () => {
+  // Collapsing the gateway key to a single source leaves the user-scope entry holding
+  // `${BIFROST_URL}` rather than a literal. Both entries then name the SAME endpoint.
+  // Expanding only the project side compared a resolved url against the raw string
+  // "${BIFROST_URL}", called them divergent, and fired the notice every single session.
+  const r = collisionFixture('https://same.example/mcp', '${BIFROST_URL}');
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /server-name collision/i);
+});
+
+test('a user-scope placeholder that cannot expand is reported, not silently compared', () => {
+  // The user entry wins the name, so if IT has no endpoint the tools are gone — the same
+  // failure as an unresolvable project entry, and it must not read as "same endpoint".
+  const r = collisionFixture('https://same.example/mcp', '${BIFROST_UNSET_XYZ}');
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /server-name collision/i);
+});
+
 test('no user-scope entry at all means no collision', () => {
   // Nothing to collide with — the project entry owns the name outright.
   const r = collisionFixture('https://project-gateway.example/mcp', null);

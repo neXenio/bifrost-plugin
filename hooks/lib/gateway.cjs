@@ -345,6 +345,15 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
 // those away would suppress a genuine collision. A string that will not parse as a URL
 // is compared trimmed and literally; it is never declared equal to something it does
 // not match, because "unparseable" is not evidence of sameness.
+// Substitute ${VAR} from the environment. An unset variable collapses to empty rather
+// than staying literal, so a caller can tell "did not expand" from "expanded to nothing"
+// by testing the raw string against UNEXPANDED_RE.
+function expandVars(raw) {
+  return String(raw == null ? '' : raw).trim()
+    .replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '')
+    .trim();
+}
+
 function sameEndpoint(a, b) {
   const norm = (raw) => {
     const s = String(raw == null ? '' : raw).trim();
@@ -399,12 +408,23 @@ function detectServerNameCollision() {
     const raw = entry && typeof entry.url === 'string' ? entry.url.trim() : '';
     if (!raw) continue;
 
-    const expanded = raw.replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '').trim();
-    if (UNEXPANDED_RE.test(raw) && !expanded) {
-      return { name, reason: 'unresolved', projectUrl: '', userUrl: mine.url };
+    // Both sides have to be expanded before they are comparable. `claude mcp add` writes
+    // a literal, but a user-scope entry may equally hold `${BIFROST_URL}` — that is the
+    // shape you get after deliberately collapsing the key to a single source, and it is
+    // the SAME endpoint as the project entry, not a divergent one. Expanding only the
+    // project side compared a resolved url against the raw string "${BIFROST_URL}" and
+    // reported a divergence on every session.
+    const rawUser = mine.url.trim();
+    const expanded = expandVars(raw);
+    const expandedUser = expandVars(rawUser);
+
+    // Either side failing to expand is the vanishing-tools case: the project entry has
+    // no endpoint, or the user entry that wins the name has none.
+    if ((UNEXPANDED_RE.test(raw) && !expanded) || (UNEXPANDED_RE.test(rawUser) && !expandedUser)) {
+      return { name, reason: 'unresolved', projectUrl: expanded, userUrl: expandedUser || rawUser };
     }
-    if (sameEndpoint(expanded, mine.url)) continue;
-    return { name, reason: 'divergent', projectUrl: expanded, userUrl: mine.url };
+    if (sameEndpoint(expanded, expandedUser)) continue;
+    return { name, reason: 'divergent', projectUrl: expanded, userUrl: expandedUser };
   }
   return null;
 }
