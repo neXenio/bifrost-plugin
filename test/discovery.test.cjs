@@ -16,6 +16,35 @@ const ROOT = path.join(__dirname, '..');
 const gw = require('../hooks/lib/gateway.cjs');
 const { budgetFill } = require('../hooks/refresh.cjs');
 
+// This plugin's own repo is also a real working project: a genuine Claude Code
+// session running here legitimately creates `.bifrost/candidates.md` via the session
+// hooks. That is correct behaviour, not pollution, and `.bifrost/.gitignore` (`*`)
+// keeps git clean regardless. So the "suite never writes into the plugin repository
+// itself" guard below can't assert absence — it has to detect that THE SUITE created
+// or modified these paths. Snapshot what is there before any test runs (module load
+// happens synchronously, before node:test executes the first registered test — see
+// the guard test itself for the invariant this depends on).
+function snapshotRepoStatePath(full) {
+  let st;
+  try { st = fs.statSync(full); } catch (_) { return { exists: false }; }
+  if (!st.isDirectory()) return { exists: true, isDir: false, mtimeMs: st.mtimeMs };
+  const entries = new Map();
+  (function walk(dir, rel) {
+    for (const name of fs.readdirSync(dir)) {
+      const abs = path.join(dir, name);
+      const relPath = rel ? path.join(rel, name) : name;
+      const s = fs.statSync(abs);
+      if (s.isDirectory()) walk(abs, relPath);
+      else entries.set(relPath, s.mtimeMs);
+    }
+  })(full, '');
+  return { exists: true, isDir: true, entries };
+}
+const REPO_STATE_GUARD = ['.bifrost', 'candidates.md', 'usage.json'].map((stray) => {
+  const full = path.join(ROOT, stray);
+  return { stray, full, before: snapshotRepoStatePath(full) };
+});
+
 // --- Group 1: flat tool name -> server derivation -------------------------------
 // Driven through the REAL discover() against a loopback MCP stub. An earlier version
 // of these tests re-implemented the derivation inside the test file, so reverting the
@@ -1331,9 +1360,32 @@ test('the suite never writes into the plugin repository itself', () => {
   // ~/.cache (deleting a developer's live session markers), once to <repo>/.bifrost
   // because a spawned hook without CLAUDE_PROJECT_DIR falls back to process.cwd().
   // Both were found by hand. This makes the third instance fail the run instead.
-  for (const stray of ['.bifrost', 'candidates.md', 'usage.json']) {
-    assert.ok(!fs.existsSync(path.join(ROOT, stray)),
-      `${stray} was created in the repo — a hook ran with cwd or HOME pointing here`);
+  //
+  // A real session working in this repo legitimately leaves `.bifrost/candidates.md`
+  // behind, so "does it exist" is the wrong question — compare against the snapshot
+  // taken at module load, before any test ran, and fail on anything THIS RUN created
+  // or modified.
+  for (const { stray, full, before } of REPO_STATE_GUARD) {
+    const after = snapshotRepoStatePath(full);
+    if (!before.exists) {
+      assert.ok(!after.exists,
+        `${stray} was created in the repo during this run — a hook ran with cwd or HOME pointing here`);
+      continue;
+    }
+    assert.ok(after.exists && after.isDir === before.isDir,
+      `${stray} was removed or replaced during this run`);
+    if (!before.isDir) {
+      assert.strictEqual(after.mtimeMs, before.mtimeMs, `${stray} was modified during this run`);
+      continue;
+    }
+    const beforeKeys = [...before.entries.keys()].sort();
+    const afterKeys = [...after.entries.keys()].sort();
+    assert.deepStrictEqual(afterKeys, beforeKeys,
+      `${stray} gained or lost files during this run — a hook wrote into it`);
+    for (const key of beforeKeys) {
+      assert.strictEqual(after.entries.get(key), before.entries.get(key),
+        `${stray}/${key} was modified during this run`);
+    }
   }
 });
 
