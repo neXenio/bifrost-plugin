@@ -33,8 +33,10 @@ Thumbs.db
 .omc/
 .DS_Store
 
-# Internal handover / working docs — not part of the shipped plugin
+# Internal handover / working docs — not part of the shipped plugin.
+# .handover/ records credential LOCATIONS, local paths and session ids — never publish.
 HANDOVER-*.md
+.handover/
 temp/
 
 # Internal design analysis — kept local, not published to this public repo.
