@@ -55,6 +55,16 @@ function snapshotRepoStatePath(full) {
 // went unwatched. `.claude` is the one entry not derived from a plugin write: nothing in
 // hooks/ creates it, but a suite that ever shells out to a real `claude` binary would
 // get ROOT/.claude/settings.local.json, and that is the same class of accident.
+//
+// LIMITATION, stated so nobody over-trusts this: `npm test` runs each test FILE in its
+// own process, in parallel. This guard only sees writes made by THIS process and by the
+// hooks THIS file spawns. compat.test.cjs spawns real hooks with cwd = the repo root
+// and, at several call sites, no CLAUDE_PROJECT_DIR — so the process.cwd() fallback
+// applies there. A write from that sibling process is invisible here, and one landing
+// before this file's module load is snapshotted as pre-existing and passes silently.
+// Not a live problem (a clean checkout has no .bifrost and `git status` stays clean),
+// and worth neither serializing the suite nor a lock file — but the guard proves less
+// than "the suite wrote nothing", and its failure is the only signal, never its pass.
 const REPO_STATE_GUARD = ['.bifrost', '.cache', '.claude'].map((stray) => {
   const full = path.join(ROOT, stray);
   return { stray, full, before: snapshotRepoStatePath(full) };
