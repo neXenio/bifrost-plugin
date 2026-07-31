@@ -41,6 +41,8 @@ finding often gets recorded by more than one session.
 - **Safe to share?** No secrets, credentials, customer or personal data. Everything
   promoted is recalled into colleagues' prompts and therefore sent to the model
   provider — treat it as publishing to the whole company.
+  Run the classification check in `guidance/memory-classification.md` before promoting
+  anything. First failing gate decides; when unsure, leave it in the spool.
 
 **4. Present your recommendation** as keep / drop / needs-editing, with one line of
 reasoning each. **Ask the user to confirm before promoting anything.** Do not promote

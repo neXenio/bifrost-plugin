@@ -292,6 +292,10 @@ retrieval narrowing, not an ACL the writer can set — so anything written to it
 recalled by every colleague immediately as settled team knowledge. A mid-session
 judgement should not become company-wide fact without a human deciding it should.
 
+What may be promoted, and what has to be redacted or withheld, is set out in
+[guidance/memory-classification.md](./guidance/memory-classification.md); the
+`/bifrost-candidates` triage step applies it.
+
 Nothing is written automatically, and answering "nothing worth recording" is a normal
 outcome. Delete the file at any time; it regenerates empty.
 
