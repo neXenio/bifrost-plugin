@@ -893,11 +893,11 @@ test('the emitted payload is valid JSON in the additionalContext shape', () => {
 });
 
 test('candidates go to a LOCAL file, never straight into shared memory', () => {
-  // memory_search exposes no tag/state filter (query, k, tier, wing, room, agent_id,
-  // conversation_id, include_expired, detail, fast), so anything stored in the corpus
-  // is recalled by every colleague immediately. A `candidate` tag would label nothing
-  // for the reader and gate nothing. A local file is the only place a candidate is
-  // verifiably not recalled.
+  // memory_search's filters (wing, room, tier, agent_id, conversation_id,
+  // include_expired) are the caller's retrieval narrowing, not a read ACL — the next
+  // caller simply omits them — so anything stored in the corpus is recalled by every
+  // colleague immediately. A `candidate` tag would label nothing for the reader and
+  // gate nothing. A local file is the only place a candidate is verifiably not recalled.
   const caps = {
     memory: { server: 'teammemory', mode: 'flat', tool: 'teammemory-memory_search' },
     skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },

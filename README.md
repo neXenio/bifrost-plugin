@@ -286,10 +286,11 @@ Candidates are **local and unreviewed**. Nothing is shared until someone promote
 /bifrost-candidates      # review, promote the good ones, prune the rest
 ```
 
-They deliberately do not go straight into shared memory. `memory_search` accepts no
-tag or state filter, so anything written to the corpus is recalled by every colleague
-immediately as settled team knowledge — a mid-session judgement should not become
-company-wide fact without a human deciding it should.
+They deliberately do not go straight into shared memory. The corpus has no read
+permission model — `memory_search` takes filters, but they are the caller's own
+retrieval narrowing, not an ACL the writer can set — so anything written to it is
+recalled by every colleague immediately as settled team knowledge. A mid-session
+judgement should not become company-wide fact without a human deciding it should.
 
 Nothing is written automatically, and answering "nothing worth recording" is a normal
 outcome. Delete the file at any time; it regenerates empty.
