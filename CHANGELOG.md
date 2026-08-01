@@ -4,6 +4,14 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-08-01
+
+### Fixed
+- Fixed curation automation counts to strictly enforce arithmetic.
+- Expanded `${VAR}` on both sides before comparing endpoints.
+- Added memory classification rules and repo-state guard checks.
+- Documented ScreenPipe auto-ingest governance decision (Add a filter).
+
 ## [1.4.1] — 2026-07-29
 
 ### Fixed
