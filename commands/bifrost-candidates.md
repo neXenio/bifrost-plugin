@@ -20,8 +20,8 @@ of them is the caller's own retrieval narrowing, chosen per query and dropped ju
 easily on the next one. Nothing a writer can set keeps an entry away from a reader. So
 anything written to the corpus is recalled by every colleague immediately, as settled
 team knowledge. Combined with correction machinery that exists but has never once been
-used, a wrong entry is effectively permanent. Promotion is therefore a human decision,
-not an automatic one.
+used, a wrong entry is effectively permanent. Shared submission is therefore deliberate,
+privacy-gated, and governed by the collective server workflow—not automatic retrieval.
 
 ## Procedure
 
@@ -45,17 +45,39 @@ finding often gets recorded by more than one session.
   anything. First failing gate decides; when unsure, leave it in the spool.
 
 **4. Present your recommendation** as keep / drop / needs-editing, with one line of
-reasoning each. **Ask the user to confirm before promoting anything.** Do not promote
-on your own judgement — that is the entire point of the file being local.
+reasoning each. Any agent may submit an eligible team fact, but the server—not this
+local file—governs collective promotion. Do not submit content that fails the privacy
+gate or needs a human decision.
 
-**5. Promote the approved ones.** For each, call the memory server's `memory_store`
-(spelled as your SessionStart context shows it for this gateway) with the finding
-rewritten as a single self-contained claim. Prefer editing to a clean, standalone
-sentence over pasting the raw bullet.
+**5. Submit the eligible ones.** For each, first check the advertised schema, then
+call the memory server's `memory_store` (spelled as your SessionStart context shows it
+for this gateway). luca-memory v0.40 requires:
 
-**6. Prune what you promoted or dropped.** Rewrite `.bifrost/candidates.md` with only
-the entries still pending, so the file does not grow without bound and the same
-candidate is not reviewed twice.
+- `subject` — the entity the claim is about, such as a project, service, or convention.
+- `valid_from` — when the claim became valid in ISO 8601. Use an earlier known validity
+  time when the finding provides one; otherwise use the current time.
+- `text` — the finding rewritten as one clean, self-contained claim. Prefer this over
+  pasting the raw bullet.
+
+`tenant` was removed. A stale Bifrost catalog may still advertise it, but it is an
+ignored compatibility input—never invent a tenant value or treat it as a privacy scope.
+
+In a correctly wired collective Bifrost deployment, the store returns
+`{"status":"pending","candidate_id":"..."}`. That is a durable server-side
+candidate with the submitting user's first vote, **not** a promoted or searchable fact.
+Keep the `candidate_id` with the local entry as a reference, but do not treat the local
+spool as the authoritative ledger. The v0.40 service does not yet expose the full
+cross-user resolution workflow, so flag any candidate that needs follow-up rather than
+claiming it was promoted.
+
+`{"status":"queued"}` is a local/private queued-ingest acceptance, and
+`{"status":"stored"}` is an immediate local/private write. If the Bifrost shared
+deployment returns either, stop and ask the gateway operator to verify collective mode
+and trusted VK-identity injection before treating it as company knowledge.
+
+**6. Prune only dropped or completed local entries.** Keep collective `pending` entries
+with their `candidate_id` until their server-side outcome is available. Do not mark a
+pending candidate as promoted merely because it was accepted by `memory_store`.
 
 ## Notes
 

@@ -84,7 +84,69 @@ mcp__bifrost__<skills-server>-skill_search("test connection")
 - Tool not found → bifrost MCP server not loaded in this session (restart CC), or your gateway has no skill server.
 - 401/403 → re-check VK (step 1).
 
-## 7. Claude Desktop issues (OAuth path)
+## 7. Tool schema is stale after an upstream MCP upgrade
+
+Suspect a stale gateway catalog when either of these happens:
+
+- a tool call fails with `Missing required argument` even though the call matches the
+  schema exposed to the client; or
+- the gateway advertises a schema that differs from what the upstream MCP server now
+  accepts.
+
+Bifrost publishes the tool catalog it captured when the **gateway process started**.
+Restarting or upgrading an upstream MCP server does not refresh that published
+snapshot.
+
+### Diagnose
+
+Compare the two catalog views:
+
+1. `GET /api/mcp/clients` through the admin API reads the live upstream client and
+   shows the upstream's current schema.
+2. Send a JSON-RPC `tools/list` POST to the public MCP endpoint with the `x-bf-vk`
+   header. This is the schema Bifrost is actually advertising to MCP callers.
+
+If the admin response is newer than `tools/list`, the gateway catalog is stale.
+
+These do **not** refresh that snapshot:
+
+- reconnecting inside Claude Code with `/mcp` — the client only reads the same stale
+  gateway catalog again;
+- `POST /api/mcp/client/{uuid}/reconnect` — it may return
+  `{"message":"MCP client reconnected successfully"}`, but it only re-establishes the
+  upstream transport. Use the UUID form when diagnosing transport problems; the
+  name-based variant may return 500;
+- `tool_sync_interval` — it cannot repair the published snapshot when
+  `config_mcp_clients.discovered_tools_json` is empty, as it was in the observed
+  failure even though the row had `updated_at = 2026-06-30`.
+
+**Fix:** restart the Bifrost gateway process, then repeat the public `tools/list` call
+and confirm that it matches the admin view.
+
+During the stale window, calls can still succeed if you pass the upstream's new
+arguments explicitly: the upstream server validates the call, not the gateway's
+cached catalog.
+
+## 8. Collective luca-memory is unexpectedly writing locally
+
+luca-memory v0.40 has two deployment modes. The Bifrost company corpus must run with
+`MEMORY_DEPLOYMENT_MODE=collective`: `memory_store(subject=..., valid_from=..., text=...)`
+then returns `{"status":"pending","candidate_id":"..."}` and does **not** write the
+fact directly. `queued` or `stored` means the service is operating in local/private
+mode, so do not call the result shared company knowledge.
+
+Collective mode also requires Bifrost to inject the authenticated virtual-key identity
+as `x-bifrost-vk-id` to the upstream luca-memory request. A missing header fails closed
+with an error naming the trusted Bifrost VK identity. The declarative client entry is
+`mcp-clients/clients.json` in the gateway repo.
+
+Do **not** use Bifrost's `allowed_extra_headers` to forward a caller-supplied
+`x-bifrost-vk-id`: that would let a caller forge a voter identity. Bifrost v1.5.16's
+MCP client configuration can forward allowlisted caller headers but cannot derive the
+validated VK ID into a new header. This needs a trusted gateway-side extension/proxy,
+then a public `tools/list` recheck after the catalog refresh.
+
+## 9. Claude Desktop issues (OAuth path)
 
 Desktop connects via OAuth through the gateway's bridge — not via `BIFROST_VK`.
 Work through these in order:
@@ -115,7 +177,7 @@ Work through these in order:
 | `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `claude mcp get bifrost` / `/mcp`; restart CC |
 | Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
-| Desktop: `mcp_registration_failed` | Wrong/ephemeral URL, bridge down, or Keycloak DCR off | Steps 7.1–7.3 above |
+| Desktop: `mcp_registration_failed` | Wrong/ephemeral URL, bridge down, or Keycloak DCR off | Steps 9.1–9.3 above |
 | Desktop: `Invalid redirect URI` | Gateway public URL changed since the client registered, or DCR redirect-URI policy too strict | Remove + re-add the connector; operator: check Keycloak allowed redirect URIs |
 | Desktop: 401 `invalid_token` after successful login | Token audience/issuer mismatch (Keycloak audience mapper missing or wrong `BRIDGE_PUBLIC_ORIGIN`) | Gateway operator: verify audience mapper = bridge origin |
 | Desktop: 403 `insufficient_scope` | Token lacks the required `mcp:read` scope | Operator: add scope to the realm's default/allowed client scopes |

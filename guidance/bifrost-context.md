@@ -49,9 +49,15 @@ its live size. Use those exact invocations — they are discovered, not guessed.
 If they are absent, discovery has not run yet (first session here, or the gateway was
 unreachable). In that case: `skill_search(query="<task>", k=5)` then
 `get_skill(name=...)` to find and load a skill; `memory_search(query="...", k=6)`
-before non-trivial work and `memory_store(text="...")` after it; `listToolFiles()` to
-see what else the gateway exposes. Confirm server names with `listToolFiles` rather
-than guessing.
+before non-trivial work. Before storing, check the advertised `memory_store` schema.
+For luca-memory v0.40, provide `subject`, ISO 8601 `valid_from`, and `text` (or `body`)
+— application `tenant` was removed; a stale catalog may still show it, but it is only a
+temporary ignored compatibility input and must not be invented. In a collective Bifrost
+deployment, a successful store returns `{"status":"pending","candidate_id":"..."}`:
+the claim is staged for collective review, not yet shared knowledge. Local/private mode
+can instead return `queued` or `stored`. Store only privacy-safe, durable facts after
+significant work. Use `listToolFiles()` to see what else the gateway exposes, and
+confirm server names there rather than guessing.
 
 ## Onboarding / troubleshooting
 

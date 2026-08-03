@@ -4,6 +4,22 @@ All notable changes to bifrost-plugin are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Memory-write guidance now follows luca-memory v0.40: `subject`, `valid_from`, and
+  `text`/`body` are the structured-claim contract; the removed `tenant` input is a
+  hidden compatibility shim, not a value agents should invent. Collective writes now
+  explain the server-side `pending` candidate result alongside local queued-ingest
+  responses.
+- `bifrost-debug` now diagnoses stale gateway tool catalogs after an upstream MCP
+  upgrade and distinguishes catalog refresh from client/transport reconnects.
+
+### Fixed
+
+- Structured memory provenance objects are rendered with their useful `subject`,
+  `wing`, `room`, and `created_at` fields instead of injecting `[object Object]` into
+  SessionStart.
+
 ## [1.4.2] — 2026-08-01
 
 ### Fixed

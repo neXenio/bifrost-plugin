@@ -14,7 +14,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 
 const gw = require('../hooks/lib/gateway.cjs');
-const { budgetFill } = require('../hooks/refresh.cjs');
+const { parseStructured, budgetFill } = require('../hooks/refresh.cjs');
 
 // This plugin's own repo is also a real working project: a genuine Claude Code
 // session running here legitimately creates `.bifrost/candidates.md` via the session
@@ -475,6 +475,36 @@ test('recalled facts are printed inside the untrusted-data fence', () => {
   const close = r.stdout.indexOf('</untrusted-reference-data>');
   assert.ok(open !== -1 && close !== -1, 'fence must be present when facts are injected');
   assert.ok(open < fact && fact < close, 'the fact must sit INSIDE the fence');
+});
+
+test('structured memory provenance is readable in the injected fact', () => {
+  const parsed = parseStructured(JSON.stringify([
+    {
+      fact: 'The gateway catalog is captured at process start.',
+      authority: 0.61,
+      provenance: {
+        subject: 'Bifrost gateway',
+        wing: 'team',
+        room: 'architecture',
+        created_at: '2026-08-03T18:46:25Z',
+        tags: 'not-injected',
+      },
+    },
+    { _system_warnings: [{ type: 'stale_memories', count: 1 }] },
+  ]));
+  assert.strictEqual(parsed.length, 1, 'system warning elements are not facts');
+  assert.strictEqual(parsed[0].similarity, 0.61, 'authority is the structured score');
+
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    memory: { server: 'teammemory', mode: 'flat', facts: parsed },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout,
+    /Provenance: subject=Bifrost gateway, wing=team, room=architecture, created_at=2026-08-03T18:46:25Z/);
+  assert.doesNotMatch(r.stdout, /\[object Object\]|not-injected/);
 });
 
 test('carried-over facts are announced as stale', () => {
@@ -1140,15 +1170,44 @@ test('a large payload survives a piped run without truncation', () => {
   assert.match(r.stdout, /<\/untrusted-reference-data>/, 'the tail of the payload must arrive');
 });
 
-test('the candidate spool has a reader shipped alongside it', () => {
+test('the candidate spool explains collective server-side promotion', () => {
   // A write path whose output nothing reads is not a loop. The review command is what
   // makes a candidate promotable rather than merely recorded.
   const cmd = path.join(ROOT, 'commands', 'bifrost-candidates.md');
   assert.ok(fs.existsSync(cmd), 'a review command must ship with the spool');
   const body = fs.readFileSync(cmd, 'utf8');
   assert.match(body, /candidates\.md/, 'must name the file it reads');
-  assert.match(body, /confirm before promoting|ask the user/i,
-    'promotion must require human confirmation');
+  assert.match(body, /server—not this\s+local file—governs collective promotion/i);
+  assert.match(body, /"status":"pending"/,
+    'collective acceptance must not be presented as a direct write');
+  assert.match(body, /candidate_id/,
+    'a collective candidate must remain traceable while unresolved');
+});
+
+test('memory write guidance carries the v0.40 structured-claim contract', () => {
+  const context = fs.readFileSync(path.join(ROOT, 'guidance', 'bifrost-context.md'), 'utf8');
+  const candidates = fs.readFileSync(path.join(ROOT, 'commands', 'bifrost-candidates.md'), 'utf8');
+  for (const field of ['subject', 'valid_from', 'text']) {
+    assert.match(context, new RegExp(`\\b${field}\\b`));
+    assert.match(candidates, new RegExp(`\\b${field}\\b`));
+  }
+  assert.match(context, /advertised `memory_store` schema/);
+  assert.match(context, /application `tenant` was removed/);
+  assert.match(candidates, /current time/);
+  assert.match(candidates, /"status":"queued"/);
+  assert.match(candidates, /"status":"pending"/);
+});
+
+test('the debug skill explains stale gateway catalogs', () => {
+  const debug = fs.readFileSync(path.join(ROOT, 'skills', 'bifrost-debug', 'SKILL.md'), 'utf8');
+  assert.match(debug, /GET \/api\/mcp\/clients/);
+  assert.match(debug, /JSON-RPC `tools\/list` POST/);
+  assert.match(debug, /gateway process started/);
+  assert.match(debug, /restart the Bifrost gateway process/);
+  assert.match(debug, /new\s+arguments explicitly/);
+  assert.match(debug, /MEMORY_DEPLOYMENT_MODE=collective/);
+  assert.match(debug, /x-bifrost-vk-id/);
+  assert.match(debug, /allowed_extra_headers/);
 });
 
 test('state paths follow HOME so they can be isolated', () => {

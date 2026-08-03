@@ -72,11 +72,26 @@ function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
 }
 
+function formatProvenance(provenance) {
+  if (typeof provenance === 'string') return clean(provenance);
+  if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) return '';
+  return [
+    ['subject', provenance.subject],
+    ['wing', provenance.wing],
+    ['room', provenance.room],
+    ['created_at', provenance.created_at],
+  ]
+    .filter(([, value]) => typeof value === 'string' && clean(value))
+    .map(([key, value]) => `${key}=${clean(value)}`)
+    .join(', ');
+}
+
 // Best-effort structured parse of a memory_search response: an array of
-// {content|text, similarity|score} objects, optionally wrapped in
-// {results:[...]} / {matches:[...]} / {facts:[...]}. Returns null (not an
-// array) if the shape isn't recognized, so callers can fall back to the
-// legacy regex scan.
+// {content|text|fact, similarity|score|authority[, provenance]} objects,
+// optionally wrapped in {results:[...]} / {matches:[...]} / {facts:[...]}.
+// Non-fact elements such as {_system_warnings:[...]} are ignored. Returns null
+// (not an array) if the shape isn't recognized, so callers can fall back to
+// the legacy regex scan.
 function parseStructured(text) {
   if (!text) return null;
   let data;
@@ -92,14 +107,13 @@ function parseStructured(text) {
       if (typeof item === 'string') return { content: clean(item), similarity: null };
       if (!item || typeof item !== 'object') return null;
       let content = item.content != null ? item.content : item.text;
-      
+
       if (!content && item.fact) {
         content = item.fact;
-        if (item.provenance) {
-          content = `${content} (Provenance: ${item.provenance})`;
-        }
+        const provenance = formatProvenance(item.provenance);
+        if (provenance) content = `${content} (Provenance: ${provenance})`;
       }
-      
+
       if (!content) return null;
       const simRaw = typeof item.similarity === 'number' ? item.similarity
         : typeof item.score === 'number' ? item.score
