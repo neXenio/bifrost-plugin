@@ -91,10 +91,19 @@ function parseStructured(text) {
     .map((item) => {
       if (typeof item === 'string') return { content: clean(item), similarity: null };
       if (!item || typeof item !== 'object') return null;
-      const content = item.content != null ? item.content : item.text;
+      let content = item.content != null ? item.content : item.text;
+      
+      if (!content && item.fact) {
+        content = item.fact;
+        if (item.provenance) {
+          content = `${content} (Provenance: ${item.provenance})`;
+        }
+      }
+      
       if (!content) return null;
       const simRaw = typeof item.similarity === 'number' ? item.similarity
         : typeof item.score === 'number' ? item.score
+        : typeof item.authority === 'number' ? item.authority
         : null;
       return { content: clean(content), similarity: simRaw };
     })
@@ -108,7 +117,7 @@ function parseStructured(text) {
 function extractFactsLegacy(text) {
   if (!text) return [];
   const facts = [];
-  const re = /"content"\s*:\s*("(?:[^"\\]|\\.)*")/g;
+  const re = /"(?:content|fact)"\s*:\s*("(?:[^"\\]|\\.)*")/g;
   let m;
   while ((m = re.exec(text)) && facts.length < FETCH_K) {
     let s;
