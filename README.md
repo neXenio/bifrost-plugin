@@ -54,16 +54,29 @@ commands, and the gateway's MCP tools.
 - **Desktop, Chat and Cowork tabs, and claude.ai web:** Customize (left sidebar) → Plugins tab → Browse plugins → Add from a repository, pointing at the GitHub repo. Plugins added this way sync through your claude.ai account, not from `~/.claude`.
 
 Every path prompts for the plugin's config at install time: the gateway URL
-(`gateway_url`, defaults to `https://bifrost.culture4.life/mcp`) and a
-virtual key (`virtual_key`) from your gateway operator. See below for the
-OAuth alternative and why it needs one more piece from your operator before
-it works.
+(`gateway_url`, prefilled with `https://bifrost.culture4.life/mcp`) and a
+virtual key (`virtual_key`).
+
+Get the key yourself, no ticket needed. Open
+[https://bifrost.culture4.life/](https://bifrost.culture4.life/), sign in
+with your company account, and the page shows your key with a copy button.
+The first visit creates it, later visits show the same one, and there is a
+Rotate button if it ever leaks. Your sign-in address has to be on
+`luca-app.de` or `nexenio.com`, otherwise the page answers `403 domain not
+permitted` after an otherwise successful login.
+
+That is the whole install for someone who does not use a terminal: get the
+key, add the plugin, paste the key. See below for the OAuth alternative,
+which would remove the key step entirely but needs one change on the
+identity provider first.
 
 ### Virtual key or OAuth
 
-The virtual key (`vk_...`, from your gateway operator) is the auth path that
-works today, on every surface, with nothing set in your shell. Paste it into
-the `virtual_key` field at install time and the MCP connection is live.
+The virtual key (`vk_...`, self-served from
+[https://bifrost.culture4.life/](https://bifrost.culture4.life/)) is the auth
+path that works today, on every surface, with nothing set in your shell.
+Paste it into the `virtual_key` field at install time and the MCP connection
+is live.
 
 Leaving `virtual_key` blank falls back to OAuth 2.1 against the company
 Keycloak, and that part of the plugin's `.mcp.json` is wired up

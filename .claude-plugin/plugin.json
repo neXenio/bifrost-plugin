@@ -16,7 +16,7 @@
     "virtual_key": {
       "type": "string",
       "title": "Virtual key (optional)",
-      "description": "Paste the vk_... key your gateway operator issued you. Leave this empty to sign in with your company account instead: the gateway answers with an OAuth challenge and Claude walks you through the browser login.",
+      "description": "Get yours at https://bifrost.culture4.life/ — sign in with your company account and the page shows your key with a copy button. First visit creates it, later visits show the same one. Paste it here.",
       "sensitive": true
     },
     "oauth_client_id": {

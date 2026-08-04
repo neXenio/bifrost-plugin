@@ -52,9 +52,17 @@ Cowork.
   sync through your claude.ai account, not from `~/.claude`.
 
 Either path prompts for the gateway URL and a virtual key at install time,
-the same `userConfig` prompt as the CLI. The virtual key is the auth path
-that works today. Leaving it blank tries OAuth instead, which needs a
-pre-registered client ID from your gateway operator before it completes (see
+the same `userConfig` prompt as the CLI. The gateway URL is prefilled, so the
+key is the only thing to supply.
+
+Get the key at [https://bifrost.culture4.life/](https://bifrost.culture4.life/):
+sign in with your company account and the page shows your key with a copy
+button. The first visit creates it, later visits show the same one. Your
+sign-in address has to be on `luca-app.de` or `nexenio.com`, otherwise you
+get `403 domain not permitted` after logging in.
+
+Leaving the key blank tries OAuth instead, which needs a pre-registered
+client ID from your gateway operator before it completes (see
 [Virtual key or OAuth](README.md#virtual-key-or-oauth) in the README).
 
 Hooks and subagents run in the Code and Cowork tabs. On the Chat tab and on
