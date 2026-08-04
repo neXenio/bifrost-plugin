@@ -647,6 +647,64 @@ test('this project\'s own server beats an unrelated project\'s', () => {
   assert.strictEqual(got.vk, 'VK-RIGHT');
 });
 
+// Since 1.5.0 there is a third credential source, checked between the environment pair
+// and the MCP config scan: CLAUDE_PLUGIN_OPTION_GATEWAY_URL / CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY,
+// which is how Claude exposes plugin.json's userConfig values to hook processes (see
+// gateway.cjs env()). The same atomicity rule applies to it: both halves from this
+// source, or neither — a lone option must never pair with a credential half pulled
+// from a different source.
+
+test('the environment pair still wins over CLAUDE_PLUGIN_OPTION_* and the MCP config', () => {
+  const got = resolveEnvIn(homeWithConfig(), {
+    BIFROST_URL: 'https://env-gateway.example/mcp',
+    BIFROST_VK: 'VK-ENV',
+    CLAUDE_PLUGIN_OPTION_GATEWAY_URL: 'https://plugin-option.example/mcp',
+    CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'VK-OPTION',
+  });
+  assert.deepStrictEqual(got, { url: 'https://env-gateway.example/mcp', vk: 'VK-ENV' });
+});
+
+test('the CLAUDE_PLUGIN_OPTION_* pair is used when the environment pair is absent', () => {
+  const got = resolveEnvIn(homeWithConfig(), {
+    BIFROST_URL: '',
+    BIFROST_VK: '',
+    CLAUDE_PLUGIN_OPTION_GATEWAY_URL: 'https://plugin-option.example/mcp',
+    CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'VK-OPTION',
+  });
+  // Also proves this source is checked BEFORE the MCP config scan: homeWithConfig()
+  // seeds a real, resolvable ~/.claude.json pair that would win if the option pair
+  // were skipped instead of preferred.
+  assert.deepStrictEqual(got, { url: 'https://plugin-option.example/mcp', vk: 'VK-OPTION' });
+});
+
+test('a lone CLAUDE_PLUGIN_OPTION_GATEWAY_URL with no key does not produce a half credential', () => {
+  const got = resolveEnvIn(homeWithConfig(), {
+    BIFROST_URL: '',
+    BIFROST_VK: '',
+    CLAUDE_PLUGIN_OPTION_GATEWAY_URL: 'https://plugin-option.example/mcp',
+    CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: '',
+  });
+  assert.notStrictEqual(got.url, 'https://plugin-option.example/mcp',
+    'a lone gateway_url option must not be returned without its key');
+  assert.deepStrictEqual(got, { url: 'https://real-gateway.example/mcp', vk: 'VK-REAL' },
+    'falls through to the next credential source (the MCP config pair)');
+});
+
+test('a lone BIFROST_URL does not pair with a CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY from the other source', () => {
+  const got = resolveEnvIn(homeWithConfig(), {
+    BIFROST_URL: 'https://attacker-controlled.example/mcp',
+    BIFROST_VK: '',
+    CLAUDE_PLUGIN_OPTION_GATEWAY_URL: '',
+    CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'VK-OPTION',
+  });
+  assert.notStrictEqual(got.url, 'https://attacker-controlled.example/mcp',
+    'the env-supplied host must not be paired with a key from CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY');
+  assert.notStrictEqual(got.vk, 'VK-OPTION',
+    'the option-supplied key must not be paired with a loose env url');
+  assert.deepStrictEqual(got, { url: 'https://real-gateway.example/mcp', vk: 'VK-REAL' },
+    'falls through to the next credential source (the MCP config pair)');
+});
+
 // --- URL sanitization --------------------------------------------------------------
 // An MCP endpoint may legitimately embed credentials. Everything emitted lands in the
 // model's context, so masking the key while echoing a URL that contains one is moot.

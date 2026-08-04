@@ -64,7 +64,17 @@ function legacyHosts() {
 }
 
 function emitEndpointMigrationNotice() {
-  const raw = (process.env.BIFROST_URL || '').trim();
+  // Since 1.5.0 the bundled .mcp.json takes its endpoint from userConfig, so a
+  // plugin-config install has no BIFROST_URL at all and reading only that would
+  // silently retire this notice for exactly the users most likely to still be on an
+  // old tunnel host. Deliberately NOT gw.env(): that pairs a URL with a key and
+  // returns neither unless both come from one source, but deciding whether an
+  // endpoint is retired needs the endpoint alone. A URL with no usable key still
+  // deserves the notice.
+  const raw = (process.env.BIFROST_URL
+    || process.env.CLAUDE_PLUGIN_OPTION_GATEWAY_URL
+    || gw.env().url
+    || '').trim();
   const canonical = (process.env.BIFROST_CANONICAL_URL || DEFAULT_CANONICAL_URL).trim();
   const hosts = legacyHosts();
   if (!raw || !canonical || !hosts.length) return;
@@ -516,9 +526,11 @@ function emitCollisionNotice() {
     `\`${c.name}\` with an unset placeholder, and you also have \`${c.name}\` ` +
     `registered at \`${safeUrl(c.userUrl)}\`. Claude Code keys servers by name, so ` +
     `\`mcp__${c.name}__*\` tools are unavailable in this directory. Fix by either ` +
-    `exporting the environment variables the project entry expects, or running ` +
-    `\`claude mcp remove ${c.name} -s user\` and letting the project entry own the ` +
-    'name. The hooks themselves are unaffected — they read the credential directly.\n'
+    `filling in the values the project entry expects (\`/plugin configure\` for a ` +
+    `plugin entry, or the matching environment variables for a hand-written one), ` +
+    `or running \`claude mcp remove ${c.name} -s user\` and letting the project entry ` +
+    'own the name. The hooks themselves are unaffected — they read the credential ' +
+    'directly.\n'
   );
 }
 

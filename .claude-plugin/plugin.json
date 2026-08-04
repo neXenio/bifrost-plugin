@@ -1,9 +1,28 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skill discovery, agent-driven memory, one-command onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
   "author": {
     "name": "neXenio GmbH",
     "url": "https://github.com/neXenio/bifrost-plugin"
+  },
+  "userConfig": {
+    "gateway_url": {
+      "type": "string",
+      "title": "Bifrost gateway URL",
+      "description": "Your gateway's MCP endpoint, including the /mcp path. Keep the default unless your operator gave you a different gateway.",
+      "default": "https://bifrost.culture4.life/mcp"
+    },
+    "virtual_key": {
+      "type": "string",
+      "title": "Virtual key (optional)",
+      "description": "Paste the vk_... key your gateway operator issued you. Leave this empty to sign in with your company account instead: the gateway answers with an OAuth challenge and Claude walks you through the browser login.",
+      "sensitive": true
+    },
+    "oauth_client_id": {
+      "type": "string",
+      "title": "OAuth client ID (optional)",
+      "description": "Only needed when signing in with your company account and your identity provider does not allow Claude to register itself. Ask your gateway operator for the client ID to paste here."
+    }
   }
 }

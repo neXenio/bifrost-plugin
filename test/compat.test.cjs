@@ -8,8 +8,9 @@
 //      sends the exact same auth header (`x-bf-vk`) and never requires a
 //      gateway-side change. Pinned by the wire-format test below.
 //   2. Plugin users on the marketplace path. Contract: same MCP server name,
-//      transport, env templates (.mcp.json byte-stable), same hook events,
-//      same injection env-var switches, and old cache files still render.
+//      transport, and placeholder-templated auth (.mcp.json shape pinned exactly),
+//      same hook events, same injection env-var switches, and old cache files
+//      still render.
 //   3. Script/CI users of bin/install.js. Contract: --key / --dry-run / --help
 //      flags still work and the server keeps the name `bifrost`.
 //
@@ -38,17 +39,29 @@ function runHook(script, env, home) {
 }
 
 // ---------------------------------------------------------------------------
-// Group 2: shipped MCP declaration is byte-stable for existing installs
+// Group 2: shipped MCP declaration is pinned exactly, byte-for-byte
 // ---------------------------------------------------------------------------
 
-test('.mcp.json keeps the exact pre-1.2.0 server shape (name, transport, templates, auth header)', () => {
+test('.mcp.json keeps the exact bifrost server shape (name, transport, userConfig templates, auth header)', () => {
+  // Since 1.5.0 the url/vk are userConfig templates rather than env-var templates
+  // (${user_config.gateway_url} / ${user_config.virtual_key}, not ${BIFROST_URL} /
+  // ${BIFROST_VK}), and the entry also carries an oauth block for the Desktop OAuth
+  // 2.1 sign-in path. What this test exists to defend is unchanged: the server is
+  // still named bifrost, still type "http", still authenticates with an x-bf-vk
+  // header, and every credential-shaped value is still a placeholder Claude Code
+  // fills in — never a baked secret.
   const mcp = JSON.parse(fs.readFileSync(path.join(ROOT, '.mcp.json'), 'utf8'));
   assert.deepStrictEqual(mcp, {
     mcpServers: {
       bifrost: {
         type: 'http',
-        url: '${BIFROST_URL}',
-        headers: { 'x-bf-vk': '${BIFROST_VK}' },
+        url: '${user_config.gateway_url}',
+        headers: { 'x-bf-vk': '${user_config.virtual_key}' },
+        oauth: {
+          authServerMetadataUrl: 'https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration',
+          clientId: '${user_config.oauth_client_id}',
+          callbackPort: 51789,
+        },
       },
     },
   });
@@ -187,6 +200,8 @@ test('listing a retired host is enough — the destination defaults to the gatew
   const r = runHook('session-start.cjs', {
     BIFROST_URL: 'https://retired.example/mcp',
     BIFROST_LEGACY_HOSTS: 'retired.example,also-retired.example',
+    // Deliberately keyless: deciding whether an endpoint is retired needs the
+    // endpoint alone, so the notice must not be gated on having a usable credential.
     BIFROST_VK: '',
   }, tmpHome());
   assert.strictEqual(r.status, 0);
@@ -201,7 +216,7 @@ test('the destination is overridable for a different deployment', () => {
     BIFROST_URL: 'https://retired.example/mcp',
     BIFROST_LEGACY_HOSTS: 'retired.example',
     BIFROST_CANONICAL_URL: 'https://their-gateway.example/mcp',
-    BIFROST_VK: '',
+    BIFROST_VK: '', // keyless on purpose, as above
   }, tmpHome());
   assert.ok(r.stdout.includes('https://their-gateway.example/mcp'));
   assert.ok(!r.stdout.includes('culture4.life'), 'must not leak the default destination');

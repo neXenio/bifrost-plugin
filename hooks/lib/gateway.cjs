@@ -115,6 +115,15 @@ function env() {
   const url = (process.env.BIFROST_URL || '').trim();
   const vk = (process.env.BIFROST_VK || '').trim();
   if (url && vk) return { url, vk };
+  // Claude exports every userConfig option to hook processes as
+  // CLAUDE_PLUGIN_OPTION_<KEY>. Since 1.5.0 the bundled .mcp.json takes both values
+  // from userConfig rather than from the environment, so on a Claude Desktop install
+  // — where there is no shell profile to export anything — this is the only source
+  // that carries a credential at all. Paired under the same rule as the env vars
+  // above: both together, or neither.
+  const optUrl = (process.env.CLAUDE_PLUGIN_OPTION_GATEWAY_URL || '').trim();
+  const optVk = (process.env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY || '').trim();
+  if (optUrl && optVk) return { url: optUrl, vk: optVk };
   const cfg = credentialFromMcpConfig();
   if (cfg) return cfg;
   return { url: '', vk: '' };

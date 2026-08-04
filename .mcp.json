@@ -2,8 +2,15 @@
   "mcpServers": {
     "bifrost": {
       "type": "http",
-      "url": "${BIFROST_URL}",
-      "headers": { "x-bf-vk": "${BIFROST_VK}" }
+      "url": "${user_config.gateway_url}",
+      "headers": {
+        "x-bf-vk": "${user_config.virtual_key}"
+      },
+      "oauth": {
+        "authServerMetadataUrl": "https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration",
+        "clientId": "${user_config.oauth_client_id}",
+        "callbackPort": 51789
+      }
     }
   }
 }
