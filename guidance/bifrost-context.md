@@ -9,10 +9,21 @@ the tools, skill library, and memory your gateway exposes.
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
-> **Auth modes:** this session (Claude Code) authenticates with the virtual-key
-> header above. Claude Desktop instead connects to the same gateway via OAuth
-> (company Keycloak login — no key needed); its setup lives in the Desktop
-> connector UI, not in `.mcp.json`. Same gateway, same tools either way.
+> **Auth modes:** every surface authenticates with the virtual-key header above.
+> The plugin collects the gateway URL and the key as install-time plugin config,
+> so Claude Desktop and claude.ai work without any shell environment. `BIFROST_URL`
+> and `BIFROST_VK` still override it for the hook layer.
+>
+> Signing in with a company account instead of a key is not available yet. The
+> gateway offers the OAuth challenge, but its authorization server does not permit
+> client registration from a desktop client, so the flow cannot complete. Use a
+> virtual key until that changes.
+>
+> **Surfaces:** hooks and subagents run in the Claude Code CLI and in Claude
+> Desktop's Code and Cowork tabs. They do not run in Desktop's Chat tab or in
+> claude.ai web chat, so on those two the memory injection, skill-discovery hints,
+> and usage tracking below are inactive. Skills, slash commands, and the gateway's
+> MCP tools work everywhere.
 
 ## Two ways tools are exposed — this matters
 

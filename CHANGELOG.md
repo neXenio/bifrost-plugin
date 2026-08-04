@@ -2,7 +2,42 @@
 
 All notable changes to bifrost-plugin are documented here.
 
-## [Unreleased]
+## [1.5.0] — 2026-08-04
+
+### Added
+
+- **Claude Desktop plugin installability.** Claude Desktop has no shell
+  environment. `.mcp.json` used `${BIFROST_URL}` and `${BIFROST_VK}`, and
+  Claude Code's documented behaviour for an unset variable with no default
+  is to load the config anyway and pass the unexpanded `${VAR}` text
+  through as the literal value. A Desktop install therefore produced an
+  MCP server whose URL was the literal string `${BIFROST_URL}` and whose
+  `x-bf-vk` header was the literal string `${BIFROST_VK}`. It could never
+  connect. Until now the Desktop story in the docs was a manual custom
+  connector or an `mcp-remote` proxy, and both bypass the plugin entirely.
+
+  `.claude-plugin/plugin.json` now declares a `userConfig` block. Two of
+  its three options carry the connection itself: `gateway_url` (string,
+  defaults to `https://bifrost.culture4.life/mcp`) and `virtual_key`
+  (string, marked `sensitive: true`, no default). Claude prompts for both
+  when the plugin is enabled, on every surface, so no shell profile is
+  required. `.mcp.json` reads `${user_config.gateway_url}` and
+  `${user_config.virtual_key}` in place of the environment variables.
+  That substitution works in `headers`, which is not shell-parsed; Claude
+  rejects `${user_config.*}` in shell-parsed fields such as hook commands
+  and `headersHelper`.
+
+  Verified against a live gateway, using a real plugin install in an
+  isolated config directory with no shell environment at all: supplying a
+  virtual key alone reaches "Connected".
+
+- **`hooks/lib/gateway.cjs` gained a third credential source.** Claude
+  exports every `userConfig` option to hook processes as
+  `CLAUDE_PLUGIN_OPTION_<KEY>`. The hooks now resolve
+  `CLAUDE_PLUGIN_OPTION_GATEWAY_URL` and `CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY`
+  after the `BIFROST_URL`/`BIFROST_VK` environment pair and before the
+  `~/.claude.json` scan. The rule that the URL and the key must come from
+  the same source, never one of each, still holds for the new source.
 
 ### Changed
 
@@ -19,6 +54,56 @@ All notable changes to bifrost-plugin are documented here.
 - Structured memory provenance objects are rendered with their useful `subject`,
   `wing`, `room`, and `created_at` fields instead of injecting `[object Object]` into
   SessionStart.
+
+- **The manifest's "OAuth 2.1 for Desktop" claim, live since 1.3.0,
+  described a flow no client could actually complete.** Without a virtual
+  key, the MCP client falls back to dynamic client registration against
+  the gateway's own auth-server metadata, and that document has never
+  advertised a `registration_endpoint`. The attempt has always reached
+  the same wall: "Incompatible auth server: does not support dynamic
+  client registration".
+
+  `.mcp.json` now carries an `oauth` block that points discovery at
+  Keycloak directly: `authServerMetadataUrl` is
+  `https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration`,
+  which does advertise a `registration_endpoint`, and a third
+  `userConfig` option, `oauth_client_id` (string, no default), feeds
+  `oauth.clientId`. Pointing discovery at Keycloak gets one step further,
+  then meets the realm's own gate: "Policy 'Trusted Hosts' rejected
+  request to client-registration service. Details: Host not trusted."
+  Supplying an `oauth.clientId` skips registration entirely and reaches
+  "Needs authentication", the healthy pre-login state.
+
+  This closes the plugin's half of the gap. What remains is an
+  identity-provider change: either the Keycloak realm's Trusted Hosts
+  policy is opened to loopback client registration, or an operator
+  pre-registers a public client with redirect URI
+  `http://localhost:51789/callback` and hands out that client ID for
+  users to paste into the new field. `callbackPort: 51789` is pinned to
+  match that redirect URI; changing it breaks whichever whitelist an
+  operator has already configured against it.
+
+### Upgrade note
+
+- **Shell-export users get a one-time reprompt.** Anyone who configured
+  the plugin through `BIFROST_URL` / `BIFROST_VK` shell exports will be
+  prompted once for `gateway_url` and `virtual_key` on upgrade, because
+  `.mcp.json` no longer reads those two variables. The variables continue
+  to work for the hook layer.
+
+### Known limits
+
+- **Hooks and subagents do not run in Desktop Chat or on claude.ai web
+  chat.** ("Hooks and sub-agents run only in Cowork, so they appear
+  grayed out in chat", support.claude.com/en/articles/13837440-use-plugins-in-claude.)
+  Memory auto-injection, skill-discovery hints, and usage tracking are all
+  hook-driven, so on those two surfaces the plugin reduces to its skills,
+  its slash commands, and the gateway's MCP tools. The Cowork tab and the
+  Code tab run the full plugin.
+- **OAuth sign-in is not yet self-service.** A virtual key is the only
+  Desktop install path that connects unattended today. Signing in with a
+  company account instead still needs one of the two identity-provider
+  changes above before a real login can complete.
 
 ## [1.4.2] — 2026-08-01
 

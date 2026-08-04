@@ -1,6 +1,6 @@
 ---
 name: bifrost-mcp-setup
-description: "Manually wire a Bifrost MCP server into Claude Code (mcp.json) or Claude Desktop (OAuth connector or local proxy) when the automated installer can't run. Triggers on 'manually add bifrost mcp', 'edit mcp.json for bifrost', 'installer failed', 'add x-bf-vk header', 'manual bifrost setup', 'mcp.json bifrost', 'bifrost in claude desktop', 'claude_desktop_config'."
+description: "Manually wire a Bifrost MCP server into Claude Code (mcp.json) when the automated installer can't run, or add the Bifrost plugin on Claude Desktop and claude.ai through the Plugins UI. Triggers on 'manually add bifrost mcp', 'edit mcp.json for bifrost', 'installer failed', 'add x-bf-vk header', 'manual bifrost setup', 'mcp.json bifrost', 'bifrost in claude desktop', 'claude_desktop_config'."
 ---
 
 # Manual Bifrost MCP Setup
@@ -61,22 +61,36 @@ claude mcp remove --scope user bifrost
 
 ## Claude Desktop
 
-Desktop does **not** read `~/.claude/mcp.json` and has no header field for a
-virtual key — it connects via OAuth (preferred) or a local proxy (fallback).
+Desktop has no shell, so `${BIFROST_URL}` and `${BIFROST_VK}` never resolve
+there, and it does not read this project's `.mcp.json`. The supported path is
+installing the plugin itself, which prompts for the gateway URL, virtual key,
+and OAuth client ID at install time and stores them as plugin config. The
+bundled `.mcp.json` reads those back as `${user_config.gateway_url}` and so on.
 
-### Preferred — OAuth connector
+### Install the plugin (preferred)
 
-1. **Settings → Connectors → Add custom connector**, URL:
-   `https://<stable-gateway-host>/mcp` (the stable domain — ephemeral tunnel
-   URLs won't work with OAuth).
-2. Connect → log in at the company Keycloak → consent. No key or config file needed.
-3. If the connector cannot self-register (`mcp_registration_failed` despite a
-   correct URL), enter the operator-provided client ID under
-   **Advanced settings → OAuth Client ID**.
+Desktop Code tab: `+` button next to the prompt box → Plugins → Add plugin.
 
-### Fallback — local `mcp-remote` proxy
+Desktop Chat and Cowork tabs, and claude.ai: Customize (left sidebar) →
+Plugins → Browse plugins → Add from a repository.
 
-Only if the OAuth bridge is not deployed. Requires Node. Edit
+Either path prompts for the gateway URL (keep the default unless your operator
+gave you a different one), a virtual key (paste the `vk_...` key your operator
+issued you), and an OAuth client ID (leave empty unless told otherwise, see
+below). Change any of these later with `/plugin configure`.
+
+Signing in with a company account instead of a virtual key does not fully work
+yet. With no client ID, Claude's OAuth discovery fails outright. With an
+operator-issued client ID it gets as far as a healthy "Needs authentication"
+state, but completing login still needs the identity provider to allow the
+redirect URI `http://localhost:51789/callback` for that client. Use a virtual
+key until your gateway operator confirms OAuth is ready. See `/bifrost-debug`
+step 9 for the exact errors and their causes.
+
+### Legacy fallback: local `mcp-remote` proxy
+
+Only for plugin versions before 1.5.0, or installs that cannot use the plugin
+at all. Requires Node. Edit
 `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or
 `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
@@ -105,6 +119,6 @@ Restart Claude Desktop afterwards.
 - **401 from bifrost** → `BIFROST_VK` is wrong or not exported. Re-check your shell env.
 - **Tool not found after restart** → `claude mcp get bifrost` should show `"type": "http"` (not `"sse"`); re-run Step 2 if the entry is missing.
 - **Gateway timeout** → gateway may be offline or `BIFROST_URL` is wrong. Contact the gateway operator.
-- **Desktop OAuth errors** (`mcp_registration_failed`, `Invalid redirect URI`, `no_virtual_key`) → run `/bifrost-debug` step 7.
+- **Desktop OAuth errors** (`Incompatible auth server`, `Policy 'Trusted Hosts' rejected`) → run `/bifrost-debug` step 9.
 
 For full diagnosis: `/bifrost-debug`.

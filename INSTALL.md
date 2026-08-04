@@ -14,8 +14,16 @@
 ```
 
 The plugin ships its own `.mcp.json`, so enabling it registers the `bifrost`
-MCP server automatically — no installer needed. Then persist the env vars in
-your shell profile and restart Claude Code:
+MCP server automatically, no installer needed. The install prompt collects
+the gateway URL and a virtual key. Leaving the key blank tries OAuth
+instead, which needs a client ID from your gateway operator before it works
+(see the README). Claude Code uses whatever you enter directly, so no shell
+setup is required for the MCP connection itself.
+
+The hooks (memory recall, skill-discovery hints, usage tracking) read the
+same two values, so the install prompt covers them as well and nothing else
+is needed. Set the env vars only to point the hooks at a different gateway
+than the MCP connection uses, then restart Claude Code:
 
 ```bash
 echo 'export BIFROST_URL=https://bifrost.culture4.life/mcp' >> ~/.zshrc   # or ~/.bashrc
@@ -23,23 +31,50 @@ echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-The URL above is the neXenio gateway. Running your own? Point `BIFROST_URL` at it —
-nothing else in the plugin is deployment-specific, and the endpoint-migration notice
-is retargetable via `BIFROST_LEGACY_HOSTS` / `BIFROST_CANONICAL_URL` (see README).
+The URL above is the neXenio gateway. Running your own? Point `BIFROST_URL`
+at it for the hooks. Nothing else in the plugin is deployment-specific, and
+the endpoint-migration notice is retargetable via `BIFROST_LEGACY_HOSTS` /
+`BIFROST_CANONICAL_URL` (see README).
 
 Run `/bifrost-setup` to verify.
+
+## Method 1b — Claude Desktop / claude.ai
+
+Claude Desktop has three tabs (Code, Cowork, Chat), and each tab installs
+plugins differently. claude.ai on the web uses the same path as Chat and
+Cowork.
+
+- **Desktop, Code tab:** click the `+` button next to the prompt box, then
+  Plugins, then Add plugin.
+- **Desktop, Chat and Cowork tabs, and claude.ai web:** open Customize in the
+  left sidebar, then the Plugins tab, then Browse plugins, then Add from a
+  repository, pointing at `neXenio/bifrost-plugin`. Plugins added this way
+  sync through your claude.ai account, not from `~/.claude`.
+
+Either path prompts for the gateway URL and a virtual key at install time,
+the same `userConfig` prompt as the CLI. The virtual key is the auth path
+that works today. Leaving it blank tries OAuth instead, which needs a
+pre-registered client ID from your gateway operator before it completes (see
+[Virtual key or OAuth](README.md#virtual-key-or-oauth) in the README).
+
+Hooks and subagents run in the Code and Cowork tabs. On the Chat tab and on
+claude.ai web they do not, so skills, slash commands, and the gateway's MCP
+tools still work there, while memory auto-injection, skill-discovery hints,
+and usage tracking are inactive. See the capability matrix in the README.
 
 ## Method 2 — `claude mcp add` (no plugin, MCP server only)
 
 > **Pick one method, not both.** Claude Code keys MCP servers by name within a scope,
 > and both methods register a server called `bifrost`. Run both and the two collide:
-> the project entry cannot expand its `${BIFROST_URL}` placeholder, and
-> `mcp__bifrost__*` tools disappear in any directory carrying the plugin's
-> `.mcp.json` — while `claude mcp list` still shows a connected `bifrost`, so it looks
-> like the gateway is down when it is not. SessionStart detects this and says so.
+> the user-scope entry wins, so `mcp__bifrost__*` tools in any directory carrying the
+> plugin's `.mcp.json` reach whichever endpoint that entry names, and if the plugin's
+> own `${user_config.gateway_url}` was never filled in they disappear entirely. Either
+> way `claude mcp list` still shows a connected `bifrost`, so it looks like the gateway
+> is down when it is not. SessionStart detects this and says so.
 >
-> Already in that state? Either export `BIFROST_URL`/`BIFROST_VK` so the project entry
-> resolves, or `claude mcp remove bifrost -s user` and let the plugin own the name.
+> Already in that state? Either run `/plugin configure` so the plugin entry resolves to
+> the same endpoint, or `claude mcp remove bifrost -s user` and let the plugin own the
+> name.
 
 If you only want the gateway MCP server without the plugin's hooks and skills:
 
@@ -105,7 +140,8 @@ After install and restart:
 # 2. If you registered the MCP server via Method 2:
 claude mcp remove --scope user bifrost
 
-# 3. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc if you added them.
+# 3. Remove 'export BIFROST_URL=...' / 'export BIFROST_VK=...' from ~/.zshrc / ~/.bashrc
+#    if you set them for the hooks (Method 1) or for Method 2.
 
 # 4. Optionally clear the cache:
 rm -rf ~/.cache/bifrost-plugin

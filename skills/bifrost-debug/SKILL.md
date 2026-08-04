@@ -1,13 +1,15 @@
 ---
 name: bifrost-debug
-description: "Diagnose why a Bifrost gateway, memory injection, or skill discovery isn't working in Claude Code or Claude Desktop. Triggers on 'bifrost not working', 'mcp not connecting', 'memory not injecting', 'skill_search failing', '401/403 from bifrost', 'bifrost debug', 'gateway unreachable', 'mcp_registration_failed', 'desktop connector failing', 'oauth error'."
+description: "Diagnose why a Bifrost gateway, memory injection, or skill discovery isn't working in Claude Code or Claude Desktop. Triggers on 'bifrost not working', 'mcp not connecting', 'memory not injecting', 'skill_search failing', '401/403 from bifrost', 'bifrost debug', 'gateway unreachable', 'mcp_registration_failed', 'desktop connector failing', 'oauth error', 'incompatible auth server', 'dynamic client registration', 'trusted hosts'."
 ---
 
 # Bifrost Diagnostics
 
 Work through this decision tree to isolate and fix the problem.
 
-## 1. Check BIFROST_URL and BIFROST_VK are set
+## 1. Check credentials are set (shell env, or plugin config)
+
+On the CLI:
 
 ```bash
 echo "URL set: ${BIFROST_URL:+yes}${BIFROST_URL:-NO — missing}"
@@ -16,7 +18,13 @@ echo "VK set: ${BIFROST_VK:+yes}${BIFROST_VK:-NO — missing}"
 
 If missing: `export BIFROST_URL=https://<your-gateway-host>/mcp` and
 `export BIFROST_VK=vk_<your-key>` (add both to `~/.zshrc` or `~/.bashrc`).
-Symptom if the VK is wrong/missing: 401 or 403 from every bifrost tool call.
+
+On Desktop and claude.ai there is no shell, so this check does not apply.
+Credentials come from the plugin's three install-time config values
+(`gateway_url`, `virtual_key`, `oauth_client_id`). Run `/plugin configure` to
+view or change them.
+
+Symptom if the key is wrong/missing: 401 or 403 from every bifrost tool call.
 
 ## 2. Check the bifrost MCP server is registered
 
@@ -146,43 +154,58 @@ MCP client configuration can forward allowlisted caller headers but cannot deriv
 validated VK ID into a new header. This needs a trusted gateway-side extension/proxy,
 then a public `tools/list` recheck after the catalog refresh.
 
-## 9. Claude Desktop issues (OAuth path)
+## 9. Claude Desktop OAuth does not complete
 
-Desktop connects via OAuth through the gateway's bridge — not via `BIFROST_VK`.
-Work through these in order:
+A virtual key is the one auth path verified fully working on Desktop, on every
+tab, with no shell environment at all. Leaving `virtual_key` blank at install
+falls back to OAuth against the identity provider named in the plugin's OAuth
+config (`idms.nexenio.com/realms/nexenio`), and that path has two known
+identity-provider-side failures before login even starts.
 
-1. **`mcp_registration_failed` on Connect** — is the connector URL the stable
-   gateway domain (e.g. `https://bifrost.culture4.life/mcp`)? Old ephemeral
-   ephemeral tunnel URLs have no OAuth bridge and will always fail.
-2. **Check OAuth discovery is live:**
+1. **Check the resource-server side of discovery** (this part works):
    ```bash
-   curl -s https://<stable-gateway-host>/.well-known/oauth-protected-resource   # → JSON with authorization_servers
-   curl -si https://<stable-gateway-host>/mcp | grep -i www-authenticate        # → Bearer resource_metadata="…"
+   curl -s https://bifrost.culture4.life/.well-known/oauth-protected-resource
+   # → 200, authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]
+   curl -si https://bifrost.culture4.life/mcp | grep -i www-authenticate
+   # → Bearer resource_metadata="https://bifrost.culture4.life/.well-known/oauth-protected-resource"
    ```
-   Missing either → the bridge is down or misrouted (gateway operator issue).
-3. **Check the authorization server supports DCR:**
+2. **Check the authorization-server side** (this is where it fails today):
    ```bash
-   curl -s <keycloak>/realms/mcp/.well-known/oauth-authorization-server | grep registration_endpoint
+   curl -s https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration \
+     | grep registration_endpoint
    ```
-   Missing → anonymous client registration is disabled in Keycloak; use the
-   pre-registered client ID in the connector's Advanced settings instead.
-4. **Login works but tools fail** — see the symptom map below (audience/scope/VK-map).
+   No `registration_endpoint` in the response is why dynamic client
+   registration fails. See the symptom map below for the exact error text.
+3. **Supplying an OAuth client ID** (the plugin's third config field, or
+   `/plugin configure`) skips self-registration and reaches a healthy "Needs
+   authentication" state. Completing the browser login from there still needs
+   the identity provider to allow the redirect URI
+   `http://localhost:51789/callback` for that client. Confirm this with your
+   gateway operator before assuming the client ID itself is wrong.
+4. **After a successful login**, the gateway maps the authenticated identity
+   to a personal virtual key server-side. `no_virtual_key` at that point means
+   the operator has not added you to that map yet.
+
+Fix, in order of what you control. Use a virtual key: it works today and needs
+no identity-provider change. For OAuth specifically, ask your gateway operator
+to relax the realm's Trusted Hosts policy for loopback client registration, or
+to pre-register a public client and give you its ID to paste into the OAuth
+client ID field.
 
 ## Symptom → cause map
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| 401 on every bifrost call | `BIFROST_VK` wrong or missing | Set env var, restart CC |
+| 401 on every bifrost call | `BIFROST_VK` wrong or missing (or the plugin's `virtual_key` config wrong) | Set env var, or `/plugin configure`, then restart |
 | 403 | Key valid but no permission | Contact gateway operator |
 | `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `claude mcp get bifrost` / `/mcp`; restart CC |
 | Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
-| Desktop: `mcp_registration_failed` | Wrong/ephemeral URL, bridge down, or Keycloak DCR off | Steps 9.1–9.3 above |
-| Desktop: `Invalid redirect URI` | Gateway public URL changed since the client registered, or DCR redirect-URI policy too strict | Remove + re-add the connector; operator: check Keycloak allowed redirect URIs |
-| Desktop: 401 `invalid_token` after successful login | Token audience/issuer mismatch (Keycloak audience mapper missing or wrong `BRIDGE_PUBLIC_ORIGIN`) | Gateway operator: verify audience mapper = bridge origin |
-| Desktop: 403 `insufficient_scope` | Token lacks the required `mcp:read` scope | Operator: add scope to the realm's default/allowed client scopes |
-| Desktop: 403 `no_virtual_key` | Authenticated but not in the bridge's VK map (deny-by-default) | Operator: assign the user a VK in Bifrost (the sync job exports it within one interval), check the `vk-sync` job is running, or add a manual map entry |
-| Desktop: access suddenly denied | Token expired without refresh, or Keycloak session revoked | Reconnect (re-login) in the connector |
+| Literal `${BIFROST_URL}` or `${BIFROST_VK}` shows up as a server URL or header value | Plugin version before 1.5.0 running on a surface with no shell environment (Desktop, claude.ai), so the placeholder is never resolved | Update to bifrost-plugin 1.5.0 or later |
+| `Incompatible auth server: does not support dynamic client registration` | Gateway's `/.well-known/oauth-authorization-server` has no `registration_endpoint` | Identity-provider side. Use a virtual key, or ask the operator for an OAuth client ID (step 9.3) |
+| `Policy 'Trusted Hosts' rejected request to client-registration service. Details: Host not trusted.` | Keycloak's realm Trusted Hosts policy blocks direct client registration | Identity-provider side. Ask the operator to relax Trusted Hosts for loopback, or provide a client ID |
+| Desktop: stuck at "Needs authentication" after entering an OAuth client ID | Identity provider has not allowlisted `http://localhost:51789/callback` as a redirect URI for that client | Operator: add the redirect URI to the client |
+| Desktop: `no_virtual_key` after a successful login | Authenticated but not yet in the gateway's VK map | Operator: assign the user a virtual key |
 
 For manual MCP wiring: `/bifrost-mcp-setup`.
 For fresh onboarding: `/bifrost-onboard`.

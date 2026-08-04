@@ -25,26 +25,89 @@ See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engine
 
 ---
 
-## Registration & Connection Modes
+## Registration and connection modes
 
-| Client / Mode | Registration | Capabilities |
-|---|---|---|
-| **Claude Code (Recommended)** | **Plugin Registration:** `/plugin marketplace add neXenio/bifrost-plugin` → `/plugin install bifrost-plugin` | Full plugin capabilities: local hooks (`SessionStart`, `PreToolCall`, `Stop`), skill discovery, memory recall, and `.mcp.json` |
-| **Claude Desktop / Web (Remote MCP)** | **Custom Connector:** Settings → Connectors → Add custom connector (`https://bifrost.culture4.life/mcp`) | Gateway MCP tools only (no local hooks) |
-| **Claude Desktop (Local Fallback)** | **Local Proxy:** `mcp-remote` proxy in `claude_desktop_config.json` | Gateway MCP tools only |
+Claude Desktop is one app with three tabs (Code, Cowork, Chat), and each tab
+hosts plugins differently. Counting the CLI and claude.ai on the web, that is
+five surfaces the plugin can run on:
 
+| Surface | Skills | Slash commands | MCP tools | Hooks | Subagents |
+|---|---|---|---|---|---|
+| Claude Code CLI | yes | yes | yes | yes | yes |
+| Desktop, Code tab | yes | yes | yes | yes | yes |
+| Desktop, Cowork tab | yes | yes | yes | yes | yes |
+| Desktop, Chat tab | yes | yes | yes | **no** | **no** |
+| claude.ai web chat | yes | yes | yes | **no** | **no** |
 
-**Desktop OAuth notes:**
+> "Hooks and sub-agents run only in Cowork, so they appear grayed out in chat."
+> Source: [Use plugins in Claude](https://support.claude.com/en/articles/13837440-use-plugins-in-claude)
 
-- The gateway exposes an OAuth 2.1 MCP endpoint (RFC 9728 metadata + Keycloak
-  token validation, served gateway-side) that maps your identity to your
-  personal virtual key, so budgets/rate-limits still apply. If you can log in
-  but get `no_virtual_key`, ask the gateway operator to add you to the VK map.
-- If the connector UI reports it cannot register a client, use its
-  **Advanced settings → OAuth Client ID** field with the client ID your
-  operator provides (pre-registered fallback).
+On the Chat tab and on claude.ai web, this plugin's memory auto-injection,
+skill-discovery hints, and usage tracking do not run, because all three are
+hook-driven. What still works there: the four bundled skills, the five slash
+commands, and the gateway's MCP tools.
 
-**Desktop fallback — local proxy** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+### Install
+
+- **Claude Code CLI:** `/plugin marketplace add neXenio/bifrost-plugin` → `/plugin install bifrost-plugin`
+- **Desktop, Code tab:** `+` button next to the prompt box → Plugins → Add plugin
+- **Desktop, Chat and Cowork tabs, and claude.ai web:** Customize (left sidebar) → Plugins tab → Browse plugins → Add from a repository, pointing at the GitHub repo. Plugins added this way sync through your claude.ai account, not from `~/.claude`.
+
+Every path prompts for the plugin's config at install time: the gateway URL
+(`gateway_url`, defaults to `https://bifrost.culture4.life/mcp`) and a
+virtual key (`virtual_key`) from your gateway operator. See below for the
+OAuth alternative and why it needs one more piece from your operator before
+it works.
+
+### Virtual key or OAuth
+
+The virtual key (`vk_...`, from your gateway operator) is the auth path that
+works today, on every surface, with nothing set in your shell. Paste it into
+the `virtual_key` field at install time and the MCP connection is live.
+
+Leaving `virtual_key` blank falls back to OAuth 2.1 against the company
+Keycloak, and that part of the plugin's `.mcp.json` is wired up
+(`authServerMetadataUrl` points at Keycloak, `callbackPort` is pinned to
+`51789`), but the flow does not complete on its own yet. Verified end to end
+with a real plugin install:
+
+- `GET /.well-known/oauth-protected-resource` returns 200 with
+  `authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]`, and
+  `POST /mcp` with no key returns 401 with the matching `WWW-Authenticate`
+  challenge, so the gateway side is correct.
+- A wrong key returns a 401 with no `WWW-Authenticate` header, so a bad key
+  does not fall back to OAuth. Clear the `virtual_key` field rather than
+  leaving a bad one in it.
+- With `virtual_key` and `oauth_client_id` both blank, Claude reaches the
+  Keycloak realm and then fails: `Policy 'Trusted Hosts' rejected request to
+  client-registration service. Details: Host not trusted.` The realm blocks
+  dynamic client registration. (Without the `authServerMetadataUrl` override,
+  the failure comes even earlier: `Incompatible auth server: does not
+  support dynamic client registration`, because the default authorization
+  server metadata has no `registration_endpoint`.)
+- With an `oauth_client_id` filled in, Claude reaches `Needs authentication`,
+  the healthy state that offers the browser login.
+
+So today, OAuth needs one more piece from your gateway operator: either the
+Keycloak realm's Trusted Hosts policy has to permit loopback client
+registration, or the operator pre-registers a public client and hands out
+its client ID for the `oauth_client_id` field. Until one of those is done,
+use the virtual key.
+
+> For gateway operators: a pre-registered client's redirect URI must be
+> exactly `http://localhost:51789/callback`, matching the `callbackPort`
+> pinned in `.mcp.json`.
+
+Once OAuth logs you in, the gateway maps your Keycloak identity to your
+personal virtual key server-side, so budgets and rate limits still apply. If
+you can log in but get `no_virtual_key`, ask the gateway operator to add you
+to the VK map.
+
+### Legacy fallback: Desktop local proxy
+
+Prefer the plugin install path above. Use this only where you cannot install
+the plugin at all (`~/Library/Application Support/Claude/claude_desktop_config.json`
+on macOS):
 
 ```json
 {
@@ -63,19 +126,27 @@ See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engine
 ```
 
 No spaces around `:` in the `--header` arg (argument-parsing quirk on some
-platforms). This file then contains your key — treat it as a secret and keep
-its permissions tight.
+platforms). This file then contains your key, so treat it as a secret and
+keep its permissions tight.
 
 ---
 
 ## Configuration
 
-The plugin is driven by env vars (set once — see [Persisting env vars](#persisting-env-vars)):
+The gateway URL and key come from the install-time plugin config
+(`gateway_url` / `virtual_key`), and the hooks read those same values, so a
+normal install needs nothing here. The env vars below are overrides, plus the
+knobs that have no plugin-config equivalent (see
+[Persisting env vars](#persisting-env-vars)).
+
+Credentials resolve in this order: the `BIFROST_URL` + `BIFROST_VK` pair, then
+the plugin config, then a scan of `~/.claude.json`. Each source is
+all-or-nothing, so a URL is never paired with a key from somewhere else.
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `BIFROST_URL` | Gateway `/mcp` endpoint (include the `/mcp` path) | placeholder in `.mcp.json` |
-| `BIFROST_VK` | Virtual key for the `x-bf-vk` auth header (`vk_…` or `sk-bf-…`) | (unset — required) |
+| `BIFROST_URL` | Overrides the gateway `/mcp` endpoint the hooks call. Only takes effect together with `BIFROST_VK` | (unset: plugin config is used) |
+| `BIFROST_VK` | Overrides the virtual key the hooks send as `x-bf-vk`. Only takes effect together with `BIFROST_URL` | (unset: plugin config is used) |
 | `BIFROST_SKILLS_SERVER` | Skill MCP server name — fallback for hook hints when auto-discovery cache is cold | `skills` |
 
 Hooks **auto-discover** the real skill-server name from your gateway's tool list
@@ -175,7 +246,7 @@ operator, then:
    /plugin marketplace add neXenio/bifrost-plugin
    /plugin install bifrost-plugin@bifrost-marketplace
    ```
-2. Persist gateway URL, key, and skill-server name (see [Persisting env vars](#persisting-env-vars)).
+2. Answer the install prompt with your gateway URL and virtual key. Only set env vars if you need an override or a non-default skill-server name (see [Persisting env vars](#persisting-env-vars)).
 3. Enable and restart Claude Code:
    ```
    /plugin enable bifrost-plugin
@@ -215,9 +286,10 @@ source ~/.zshrc
 ```
 
 The plugin ships a `.mcp.json`, so the `bifrost` MCP server wires itself from
-`$BIFROST_URL` / `$BIFROST_VK` when you enable it — no installer script needed.
-It ships **disabled** (`defaultEnabled: false`) so it stays dormant until you set
-your key. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
+the gateway URL and virtual key you enter in the install-time plugin config
+prompt, no installer script and no shell env vars needed. It ships
+**disabled** (`defaultEnabled: false`) so it stays dormant until you enable
+it. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
 `/bifrost-debug` if something's off.
 
 ### Gateway skill discovery vs Bifrost Skills Repository
@@ -257,9 +329,8 @@ node bin/install.js --dry-run             # prints the claude mcp add command in
 ## Requirements
 
 - Node.js >= 18
-- Claude Code with MCP support
-- `BIFROST_URL` set to your gateway's `/mcp` endpoint
-- `BIFROST_VK` set to your virtual key (from your gateway operator)
+- Claude Code, or Claude Desktop, or claude.ai on the web
+- Your gateway's `/mcp` endpoint and a virtual key from your gateway operator, entered at the install prompt
 
 ---
 
@@ -311,19 +382,24 @@ Marketplace installs need no registration step at all: the plugin ships this
   "mcpServers": {
     "bifrost": {
       "type": "http",
-      "url": "${BIFROST_URL}",
-      "headers": { "x-bf-vk": "${BIFROST_VK}" }
+      "url": "${user_config.gateway_url}",
+      "headers": { "x-bf-vk": "${user_config.virtual_key}" }
     }
   }
 }
 ```
 
-The manual fallback (`bin/install.js`, or `/bifrost-setup`) registers the same
-server at user scope via `claude mcp add --scope user` — the plugin never edits
-Claude Code config files itself. `${BIFROST_URL}` and `${BIFROST_VK}` are
-resolved at runtime from Claude Code's environment (`~/.claude/settings.json`
-`env` key and/or your shell). Without `--key`, the key is never stored in any
-file.
+`gateway_url` and `virtual_key` come from the plugin's `userConfig`, which
+Claude Code prompts for at install time on every surface (see [Registration
+and connection modes](#registration-and-connection-modes)).
+
+The manual fallback (`bin/install.js`, or `/bifrost-setup`) registers a
+separate server at user scope via `claude mcp add --scope user`; the plugin
+never edits Claude Code config files on its own. That path still resolves
+`${BIFROST_URL}` and `${BIFROST_VK}` at runtime from Claude Code's
+environment (`~/.claude/settings.json` `env` key and/or your shell), unlike
+the plugin's own `.mcp.json` above. Without `--key`, the key is never stored
+in any file.
 
 ---
 

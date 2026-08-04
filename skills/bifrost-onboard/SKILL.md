@@ -74,26 +74,32 @@ grep -q "## Skill Discovery" ~/.claude/CLAUDE.md \
 
 ## Step 6 — Claude Desktop (optional)
 
-Ask whether the user also wants the gateway in Claude Desktop. If yes:
+Ask whether the user also wants the gateway in Claude Desktop. If yes, the
+plugin install itself is the setup: there is no separate registration step.
 
-**Preferred — zero-config OAuth Connect:**
+1. Desktop Code tab: `+` button next to the prompt box → Plugins → Add
+   plugin. Desktop Chat and Cowork tabs, and claude.ai: Customize (left
+   sidebar) → Plugins → Browse plugins → Add from a repository.
+2. At the install prompt, fill in the gateway URL (keep the default unless
+   the operator gave you a different one) and paste the `vk_...` virtual key
+   the operator issued you. Leave the OAuth client ID field empty unless told
+   otherwise.
+3. Verify: gateway tools appear in Desktop after install.
 
-1. Claude Desktop → **Settings → Connectors → Add custom connector**.
-2. Paste the gateway URL: `https://<stable-gateway-host>/mcp` (must be the
-   stable domain the operator gave you — not an ephemeral tunnel URL).
-3. Click Connect → a browser opens the company Keycloak login → sign in and
-   consent. Desktop registers itself automatically (DCR + PKCE).
-4. Verify: the connector shows connected and gateway tools appear in Desktop.
+Leaving the virtual key blank tries OAuth instead, and that path does not
+fully work yet without an operator-issued OAuth client ID. Even with one, the
+identity provider still needs to allow the redirect URI
+`http://localhost:51789/callback`. Recommend a virtual key for now; point to
+`/bifrost-debug` for the exact errors if the user wants to try OAuth anyway.
 
 If login succeeds but requests fail with `no_virtual_key`, the operator has
-not mapped your identity to a virtual key yet — ask them to add you.
-If the connector cannot register a client, enter the operator-provided client
-ID under **Advanced settings → OAuth Client ID**.
+not mapped the user's identity to a virtual key yet. Ask them to add the user.
 
-**Fallback — local proxy** (only if the OAuth bridge is not deployed): add an
-`mcp-remote` entry to `~/Library/Application Support/Claude/claude_desktop_config.json`
-(see README → Authentication modes for the exact snippet; requires Node, and the
-file then holds your VK — treat it as a secret).
+Fallback, only for plugin versions before 1.5.0 or installs that cannot use
+the plugin at all: add an `mcp-remote` entry to
+`~/Library/Application Support/Claude/claude_desktop_config.json` (see README
+→ Legacy fallback: Desktop local proxy for the exact snippet; requires Node,
+and the file then holds the VK, so treat it as a secret).
 
 ## Troubleshooting
 

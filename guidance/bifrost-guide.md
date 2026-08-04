@@ -69,23 +69,37 @@ restart Claude Code, and confirm the `bifrost` server appears in `/mcp`.
 
 ## Claude Desktop
 
-Claude Desktop does not use `.mcp.json` or the `x-bf-vk` header. It connects to
-the same gateway via **OAuth**: Settings → Connectors → Add custom connector →
-paste the stable gateway URL (`https://<stable-gateway-host>/mcp`) → log in with
-your company Keycloak account. The gateway's OAuth bridge maps your identity to
-your personal virtual key, so governance (budgets, rate limits, tool groups)
-applies exactly as on the CLI. Fallback for environments without the bridge: a
-local `mcp-remote` proxy entry in `claude_desktop_config.json` (see README →
-Authentication modes).
+Claude Desktop installs the plugin itself rather than reading a project's
+`.mcp.json`. Code tab: `+` button next to the prompt box → Plugins → Add
+plugin. Chat and Cowork tabs, and claude.ai web: Customize (left sidebar) →
+Plugins → Browse plugins → Add from a repository. Either path prompts for the
+same three config values as the CLI (gateway URL, virtual key, OAuth client
+ID), and the bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
+and so on. There is no separate env-var step.
+
+Leaving the virtual key blank falls back to OAuth against the identity
+provider named in the plugin's OAuth config. That path does not fully work
+yet: without an OAuth client ID, registration fails outright, and even with an
+operator-issued client ID the identity provider still needs to allow the
+loopback redirect URI before login can finish. Use a virtual key until your
+gateway operator confirms OAuth is ready. See `/bifrost-debug` for the exact
+errors. For installs that cannot use the plugin at all, see README → Legacy
+fallback: Desktop local proxy.
 
 ## Hooks
 
-The plugin registers two Claude Code hooks:
+The plugin registers five hooks across five Claude Code events:
 
 | Event | Hook file | What it does |
 |-------|-----------|--------------|
 | `SessionStart` | `session-start.cjs` | Injects `guidance/bifrost-context.md` (~400 tokens) as session context |
-| `UserPromptSubmit` | `prompt-submit.cjs` | Skill-discovery hint for task-verb prompts (suppressed when `BIFROST_VK` unset) |
+| `UserPromptSubmit` | `prompt-submit.cjs` | Skill-discovery hint for task-verb prompts (suppressed when no gateway credential resolves) |
+| `Stop` | `session-reflect.cjs` (async) | Asks about memory candidates from the third turn of a session, then every eight |
+| `PostToolUse` | `usage.cjs` (async) | Records which capability classes were used, for successful bifrost tool calls |
+| `PostToolUseFailure` | `usage.cjs` (async) | Same usage recording, for failed bifrost tool calls |
+
+`PostToolUse` and `PostToolUseFailure` both match only calls to
+`mcp__(bifrost|plugin_bifrost-plugin_bifrost)__.*` tools.
 
 All hooks are silent-fail: any error results in `exit 0` with no output. A
 crashed hook never blocks your session.
@@ -118,8 +132,8 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 | 401 / 403 from bifrost | `BIFROST_VK` missing or wrong | Re-run setup or set `export BIFROST_VK=vk_<your-key>` |
 | No skills found | bifrost MCP not loaded, or no skill server | Check `claude mcp get bifrost` / `/mcp`; run `/bifrost-mcp-setup` |
 | Hook not firing | Plugin not installed/enabled | Re-install / re-enable via `/plugin`; restart CC (hooks ship inside the plugin, not `settings.json`) |
-| Desktop: `mcp_registration_failed` | Ephemeral/old URL, OAuth bridge down, or DCR disabled | Use the stable gateway URL; `/bifrost-debug` step 7 |
-| Desktop: `no_virtual_key` after login | Identity not in the bridge's VK map | Ask the gateway operator to map your email to a virtual key |
+| Desktop: OAuth fails before login (`Incompatible auth server` or `Trusted Hosts` errors) | Gateway or identity provider does not support Claude self-registering as an OAuth client | Use a virtual key, or ask your operator for an OAuth client ID; `/bifrost-debug` step 9 |
+| Desktop: `no_virtual_key` after a successful login | Identity not yet in the gateway's VK map | Ask the gateway operator to map your email to a virtual key |
 
 ## Gateway routing reference
 
