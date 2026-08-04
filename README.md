@@ -1,10 +1,10 @@
 # bifrost-plugin
 
 Claude Code plugin for any [Bifrost](https://github.com/maximhq/bifrost) MCP
-gateway: one-command setup, skill discovery, and agent-driven memory via MCP.
+gateway: plugin registration with lifecycle hooks, skill discovery, agent-driven memory, and MCP.
 
-**Scope: Claude Code, plus Claude Desktop via OAuth** (see [Authentication modes](#authentication-modes)).
-Other editors (Cursor, Codex, Antigravity, Augment) are deferred to v2.
+**Primary Target: Claude Code Plugin Registration** (includes hooks, skills, and memory).
+*Standalone Remote MCP support is also available for Claude Desktop & web custom connectors.*
 
 The skill-discovery and memory features need a gateway that exposes a skill server
 and/or a memory server. Without them, the plugin still wires up the gateway and
@@ -16,23 +16,23 @@ degrades gracefully — those features simply no-op.
 
 | Pillar | Behavior |
 |--------|----------|
-| 1 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
-| 2 — One-command onboarding | `node bin/install.js --key vk_…` (or `/bifrost-setup`) wires the MCP entry in seconds |
-| 3 — Agent-driven memory | The agent recalls relevant context via the gateway's memory MCP tools before non-trivial tasks, and saves decisions after significant work — no automatic injection |
+| 1 — Plugin Lifecycle Hooks | Auto-injects recalled memory context at session start, enforces skill-discovery hints before non-trivial tasks, spools memory candidates, and tracks capability usage |
+| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
+| 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node bin/install.js --key vk_…` (or `/bifrost-setup`) |
+| 4 — Agent-driven memory | Recalls context via gateway memory tools before non-trivial tasks and saves durable decisions after work |
 
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
 
 ---
 
-## Authentication modes
+## Registration & Connection Modes
 
-The same gateway supports three ways to connect, depending on the client:
-
-| Client | Auth | Setup |
+| Client / Mode | Registration | Capabilities |
 |---|---|---|
-| **Claude Desktop (recommended)** | OAuth 2.1 via the company Keycloak | Settings → Connectors → Add custom connector → paste `https://bifrost.culture4.life/mcp` → log in with your company account. Zero further config. |
-| **Claude Desktop (fallback)** | Local `mcp-remote` proxy injecting your VK | See snippet below — only needed if the gateway's OAuth endpoint is unavailable |
-| **Claude Code CLI** | `x-bf-vk` header from `${BIFROST_VK}` | Unchanged — everything in [Install](#install) below |
+| **Claude Code (Recommended)** | **Plugin Registration:** `/plugin marketplace add neXenio/bifrost-plugin` → `/plugin install bifrost-plugin` | Full plugin capabilities: local hooks (`SessionStart`, `PreToolCall`, `Stop`), skill discovery, memory recall, and `.mcp.json` |
+| **Claude Desktop / Web (Remote MCP)** | **Custom Connector:** Settings → Connectors → Add custom connector (`https://bifrost.culture4.life/mcp`) | Gateway MCP tools only (no local hooks) |
+| **Claude Desktop (Local Fallback)** | **Local Proxy:** `mcp-remote` proxy in `claude_desktop_config.json` | Gateway MCP tools only |
+
 
 **Desktop OAuth notes:**
 
