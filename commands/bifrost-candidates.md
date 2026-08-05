@@ -73,9 +73,13 @@ Read what the store returns rather than assuming it landed. `{"status":"stored"}
 immediate write and `{"status":"queued"}` a queued-ingest acceptance; both mean the
 claim is in. `{"status":"skipped","reason":"noise"}` means the noise classifier dropped
 it — reread the text as if you had not written it, and only resend with `force=true`
-if it really is a durable fact rather than status or telemetry. Anything else, including
-a `{"status":"pending"}` reply, means the memory server is older than v0.42 and this
-plugin's calls are not landing: say so rather than reporting the submission as done.
+if it really is a durable fact rather than status or telemetry.
+`{"status":"skipped","reason":"near_duplicate"}` means an equivalent memory already
+exists, so the knowledge is already in the corpus and there is nothing left to do.
+`{"status":"error"}` means nothing was written; read the `error` field and fix what it
+names before resending. Only a `{"status":"pending"}` reply means the memory server
+is older than v0.42 and this plugin's calls are not landing:
+say so rather than reporting the submission as done.
 
 **6. Prune only dropped or completed local entries.** Keep an entry in the spool until
 its store returned `stored` or `queued`. Do not mark one as promoted on the strength of

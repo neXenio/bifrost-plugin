@@ -255,7 +255,9 @@ Unverified at the time of writing. Each one changes how this page should read.
      graph query can see?
    - **`memory_call(action="evolve.purge_noise")`.** It tombstones cards. Test: is a
      tombstoned card gone from recall, and is it gone from the provider's side or only
-     from this index? Preview it first with `meta.purge_noise_preview`.
+     from this index? It applies immediately; there is no rehearsal mode.
+     `meta.purge_noise_status` reports a sweep already running or finished, it does not
+     preview one.
    - **`memory_call(action="evolve.edit")`.** It writes a correction, carries the
      original's links over, then retires the original — so the id changes, since ids are
      content-addressed. This is the first purpose-built correction path the corpus has
