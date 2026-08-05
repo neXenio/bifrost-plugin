@@ -26,9 +26,25 @@
 //                               (server-side fast path; opt-in until the live
 //                               gateway ships the param — an unknown param on a
 //                               strict schema would otherwise reject the call)
+//   BIFROST_MEMORY_WARN_THRESHOLD — count a `_system_warnings` entry must reach
+//                               before it is cached for injection (default 50);
+//                               see extractSystemWarnings/actionableWarnings below
 // We query with a wider k than we intend to keep, then greedily fill the
 // budget from the highest-similarity results first, giving higher-scored
 // facts a larger snippet allowance instead of a flat per-fact truncation.
+//
+// luca-memory is a passive store: it never runs its own maintenance, only
+// advertises what needs doing, by appending a `{"_system_warnings":[...]}` entry to
+// the end of every memory_search response (parseStructured already drops this as a
+// non-fact; see its comment). We are the one component that talks to memory_search
+// on every session, so we are the only place that can notice. Surfacing every
+// warning unconditionally would become wallpaper across ~60 agents mostly mid-task
+// on unrelated work, so only warnings that clear BIFROST_MEMORY_WARN_THRESHOLD (for
+// count-bearing warnings like staleness) or that carry no count at all (a
+// presence-is-the-signal warning, e.g. a dead/failed queue entry) get cached.
+// Deliberately NOT a memory_call(action="meta.stats") round trip: the "the
+// session-start refresh never calls memory_call" test pins refresh.cjs to
+// memory_search alone, and this data already rides along for free on that call.
 
 const fs = require('fs');
 const path = require('path');
@@ -48,6 +64,11 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
 const DEFAULT_MIN_SIM = 0;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
+// 181 memories sitting unflagged for three weeks (the incident that motivated this)
+// is well past due; single-digit/low-double-digit staleness is normal churn in a
+// corpus this many agents write to continuously. 50 catches a real backlog early
+// without nagging on ordinary drift.
+const DEFAULT_WARN_THRESHOLD = 50;
 // How long facts may be carried forward across empty refreshes before we stop
 // injecting them. Bounds retention when a gateway stays broken.
 const MAX_CARRY_FORWARD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -67,6 +88,7 @@ const SNIPPET_LEN = envInt('BIFROST_MEMORY_SNIPPET_LEN', DEFAULT_SNIPPET_LEN);
 const BUDGET_CHARS = envInt('BIFROST_INJECT_BUDGET', DEFAULT_BUDGET_CHARS);
 const MIN_SIM = envFloat('BIFROST_MEMORY_MIN_SIM', DEFAULT_MIN_SIM);
 const USE_FAST = process.env.BIFROST_MEMORY_FAST === '1';
+const WARN_THRESHOLD = envInt('BIFROST_MEMORY_WARN_THRESHOLD', DEFAULT_WARN_THRESHOLD);
 
 function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
@@ -119,6 +141,55 @@ function parseStructured(text) {
       return { content: clean(content), similarity: simRaw };
     })
     .filter((r) => r && r.content);
+}
+
+// A warning entry needs a string `type` or `message` to be recognized as one at
+// all — anything else (null, an array, a bare number) is not warning-shaped and is
+// dropped rather than guessed at.
+function isWarningLike(w) {
+  return !!w && typeof w === 'object' && !Array.isArray(w)
+    && (typeof w.type === 'string' || typeof w.message === 'string');
+}
+
+// Best-effort extraction of the `_system_warnings` array luca-memory appends as an
+// extra element to every memory_search response (see module doc above, and
+// parseStructured's comment, which treats this same element as a non-fact and drops
+// it). Mirrors parseStructured's container unwrapping (bare array, or
+// {results|matches|facts:[...]}) since the warning element rides alongside whichever
+// shape the facts came back in. Returns [] on anything unparseable or unrecognized.
+function extractSystemWarnings(text) {
+  if (!text) return [];
+  let data;
+  try { data = JSON.parse(text); } catch (_) { return []; }
+  const containers = [
+    Array.isArray(data) ? data : null,
+    Array.isArray(data && data.results) ? data.results : null,
+    Array.isArray(data && data.matches) ? data.matches : null,
+    Array.isArray(data && data.facts) ? data.facts : null,
+  ];
+  for (const c of containers) {
+    if (!c) continue;
+    for (const item of c) {
+      if (item && typeof item === 'object' && Array.isArray(item._system_warnings)) {
+        return item._system_warnings.filter(isWarningLike);
+      }
+    }
+  }
+  // Defensive fallback: a top-level {_system_warnings:[...]} property rather than an
+  // array element. Not the documented shape, but cheap to accept.
+  if (data && typeof data === 'object' && Array.isArray(data._system_warnings)) {
+    return data._system_warnings.filter(isWarningLike);
+  }
+  return [];
+}
+
+// Threshold gate: a warning with a numeric `count` (e.g. stale_memories) only clears
+// the bar at BIFROST_MEMORY_WARN_THRESHOLD or above — ordinary corpus churn stays
+// silent. A warning with no numeric count has nothing to threshold against and is
+// treated as inherently actionable (a failed/dead queue entry does not become less
+// true at a smaller count; there is no count).
+function actionableWarnings(warnings) {
+  return warnings.filter((w) => typeof w.count !== 'number' || w.count >= WARN_THRESHOLD);
 }
 
 // Last resort: regex-scan raw "content":"..." pairs when the response isn't
@@ -180,13 +251,18 @@ function budgetFill(results) {
 // Query memory_search (optionally KB-wing-scoped) and return a sized,
 // budget-filled fact list. Never throws — an unparseable/empty response just
 // yields fewer or zero facts.
-async function searchFacts(cap, query, wing) {
+//
+// `warningsOut`, if given an array, gets any `_system_warnings` found on this
+// response pushed into it (unfiltered by threshold — callers decide). Optional and
+// additive so existing callers/tests passing 3 args are unaffected.
+async function searchFacts(cap, query, wing, warningsOut) {
   // luca-memory v0.42 argument shape. Anything older rejects it and recall goes empty;
   // /bifrost-debug section 8 names that symptom.
   const args = { query, limit: FETCH_K, detail: 'l1' };
   if (wing) args.filters = { wing };
   if (USE_FAST) args.fast = true;
   const text = await gw.callCapability(cap, 'memory_search', args, TIMEOUT_MS);
+  if (Array.isArray(warningsOut)) warningsOut.push(...extractSystemWarnings(text));
   const structured = parseStructured(text);
   const results = structured || extractFactsLegacy(text);
   return budgetFill(results);
@@ -224,13 +300,20 @@ async function main() {
   }
 
   if (caps.memory) {
+    const rawWarnings = [];
     out.memory = {
       server: caps.memory.server,
       mode: caps.memory.mode,
-      facts: await searchFacts(caps.memory, query, null),
+      facts: await searchFacts(caps.memory, query, null, rawWarnings),
     };
     // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
     // stays on memory_search alone. session-start renders without it.
+
+    // Maintenance backlog luca-memory advertised on this same call (see module doc).
+    // Only what clears actionableWarnings' bar gets cached — session-start renders
+    // whatever is here unconditionally, so the threshold decision lives here, once.
+    const warnings = actionableWarnings(rawWarnings);
+    if (warnings.length) out.memory.warnings = warnings;
 
     // No default wing name: KB recall is opt-in only, via an explicit
     // BIFROST_KB_WING configured for this gateway's KB scope.
@@ -302,4 +385,7 @@ if (require.main === module) {
   main().then(() => process.exit(0)).catch(() => process.exit(0));
 }
 
-module.exports = { parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious, MAX_CARRY_FORWARD_MS, searchFacts };
+module.exports = {
+  parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious,
+  MAX_CARRY_FORWARD_MS, searchFacts, extractSystemWarnings, actionableWarnings,
+};

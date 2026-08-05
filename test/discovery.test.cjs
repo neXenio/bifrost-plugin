@@ -1861,3 +1861,155 @@ test('the session-start refresh never calls memory_call', () => {
   assert.doesNotMatch(code, /['"`]memory_call['"`]/,
     'refresh.cjs must reach the gateway with memory_search alone');
 });
+
+// --- luca-memory maintenance warnings (BIFROST_MEMORY_WARN_THRESHOLD) -------------
+// luca-memory appends a `{"_system_warnings":[...]}` entry to every memory_search
+// response to advertise maintenance it never performs itself (stale facts, a
+// stuck ingest queue, ...). refresh.cjs extracts it, thresholds it, and caches only
+// what merits interrupting a session; session-start renders whatever survives that
+// as a single short line.
+
+const { extractSystemWarnings, actionableWarnings } = require('../hooks/refresh.cjs');
+
+test('a system warning appended as the extra array element is extracted', () => {
+  const text = JSON.stringify([
+    { content: 'a fact', relevance: 0.9 },
+    { _system_warnings: [
+      { type: 'stale_memories', count: 181, message: '181 memories not accessed in 30+ days — run /coach for decay review' },
+    ] },
+  ]);
+  const warnings = extractSystemWarnings(text);
+  assert.strictEqual(warnings.length, 1);
+  assert.strictEqual(warnings[0].type, 'stale_memories');
+  assert.strictEqual(warnings[0].count, 181);
+});
+
+test('no _system_warnings element yields no warnings', () => {
+  const text = JSON.stringify([{ content: 'a fact', relevance: 0.9 }]);
+  assert.deepStrictEqual(extractSystemWarnings(text), []);
+});
+
+test('extractSystemWarnings never throws on malformed or unexpected input', () => {
+  assert.deepStrictEqual(extractSystemWarnings(''), []);
+  assert.deepStrictEqual(extractSystemWarnings(null), []);
+  assert.deepStrictEqual(extractSystemWarnings('not json'), []);
+  assert.deepStrictEqual(extractSystemWarnings('{"unrelated": true}'), []);
+  assert.deepStrictEqual(extractSystemWarnings(JSON.stringify({ _system_warnings: 'not-an-array' })), []);
+  // A warning entry with neither `type` nor `message` is not warning-shaped.
+  assert.deepStrictEqual(
+    extractSystemWarnings(JSON.stringify([{ _system_warnings: [42, null, {}, { count: 5 }] }])),
+    []
+  );
+  // A top-level {_system_warnings:[...]} property, not an array element.
+  assert.strictEqual(
+    extractSystemWarnings(JSON.stringify({ _system_warnings: [{ type: 'x' }] })).length, 1
+  );
+});
+
+test('actionableWarnings drops a count-bearing warning below threshold, keeps one above it', () => {
+  const kept = actionableWarnings([
+    { type: 'stale_memories', count: 181, message: 'well above default threshold' },
+  ]);
+  assert.strictEqual(kept.length, 1);
+
+  const dropped = actionableWarnings([
+    { type: 'stale_memories', count: 3, message: 'ordinary churn' },
+  ]);
+  assert.deepStrictEqual(dropped, []);
+});
+
+test('actionableWarnings always keeps a warning with no numeric count', () => {
+  // A failed/dead queue entry does not get less true at a smaller count — there is
+  // no count to threshold against, so presence alone is the signal.
+  const kept = actionableWarnings([
+    { type: 'ingest_queue_dead', message: 'ingest queue has a dead entry' },
+  ]);
+  assert.strictEqual(kept.length, 1);
+});
+
+test('searchFacts reports raw system warnings via the optional warningsOut sink, unfiltered', async () => {
+  const hit = JSON.stringify([
+    { content: 'a fact', relevance: 0.9 },
+    { _system_warnings: [{ type: 'stale_memories', count: 181, message: 'stale backlog' }] },
+  ]);
+  const warningsOut = [];
+  const facts = await withStubbedGateway(recordingGateway([], hit),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', null, warningsOut));
+  assert.strictEqual(facts.length, 1, 'the warning element must not be counted as a fact');
+  assert.strictEqual(warningsOut.length, 1);
+  assert.strictEqual(warningsOut[0].count, 181);
+});
+
+test('searchFacts without a warningsOut argument behaves exactly as before (back-compat)', async () => {
+  const hit = JSON.stringify([{ content: 'a fact', relevance: 0.9 }]);
+  const facts = await withStubbedGateway(recordingGateway([], hit),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', null));
+  assert.strictEqual(facts.length, 1);
+});
+
+test('a cached warning above threshold renders as one short maintenance line', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    memory: {
+      server: 'teammemory', mode: 'flat', facts: [],
+      warnings: [{ type: 'stale_memories', count: 181, message: '181 memories not accessed in 30+ days — run /coach for decay review' }],
+    },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /\*\*Needs attention\*\*:.*181 memories not accessed in 30\+ days/);
+});
+
+test('no warnings key at all renders nothing extra', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    memory: { server: 'teammemory', mode: 'flat', facts: [] },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /Needs attention/);
+});
+
+test('an empty warnings array (below-threshold case already filtered by refresh.cjs) renders nothing', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    memory: { server: 'teammemory', mode: 'flat', facts: [], warnings: [] },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r.status, 0);
+  assert.doesNotMatch(r.stdout, /Needs attention/);
+});
+
+test('a malformed warnings shape in the cache does not throw and renders nothing', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    // warnings as a bare string, and as an array of non-warning-shaped junk.
+    memory: { server: 'teammemory', mode: 'flat', facts: [], warnings: 'not-an-array' },
+  });
+  const r1 = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r1.status, 0);
+  assert.doesNotMatch(r1.stdout, /Needs attention/);
+
+  const proj2 = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj2, {
+    memory: { server: 'teammemory', mode: 'flat', facts: [], warnings: [null, 42, {}, { count: 5 }] },
+  });
+  const r2 = runSessionStart({ CLAUDE_PROJECT_DIR: proj2 }, home);
+  assert.strictEqual(r2.status, 0);
+  assert.doesNotMatch(r2.stdout, /Needs attention/);
+});
+
+test('a warning with no message falls back to a synthesized "<count> <type>" line', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    memory: { server: 'teammemory', mode: 'flat', facts: [], warnings: [{ type: 'stale_memories', count: 181 }] },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /\*\*Needs attention\*\*:.*181 stale memories/);
+});

@@ -340,6 +340,24 @@ function factText(f) {
   return (f && typeof f.content === 'string') ? f.content : '';
 }
 
+// Warnings are cached as {type, count, message} — refresh.cjs already applied
+// BIFROST_MEMORY_WARN_THRESHOLD, so anything present here is meant to render.
+// `message` is luca-memory's own wording; a future warning type shipped without one
+// falls back to `<count> <type>` rather than being dropped silently.
+function warningText(w) {
+  if (!w || typeof w !== 'object') return '';
+  if (typeof w.message === 'string' && w.message.trim()) return clean(w.message);
+  // No message to fall back to: a bare `{count:5}` with no `type` identifies nothing
+  // worth showing, so it takes a string `type` to render at all.
+  if (typeof w.type !== 'string' || !w.type.trim()) return '';
+  const count = typeof w.count === 'number' ? `${w.count} ` : '';
+  return clean(`${count}${w.type.replace(/_/g, ' ')}`);
+}
+
+function clean(s) {
+  return String(s).replace(/\s+/g, ' ').trim();
+}
+
 // Memory is advertised, then searched by the agent — not pre-fetched and dumped.
 //
 // The session-start query can only ever be the project directory name plus a fixed
@@ -368,6 +386,15 @@ function emitMemory(cache, cfg, use) {
     : 'shared across the company';
 
   const lines = ['', `## Bifrost memory — ${size}`, ''];
+
+  // Maintenance backlog, thresholded by refresh.cjs (BIFROST_MEMORY_WARN_THRESHOLD).
+  // Nothing here when the corpus is healthy; one short line when it isn't.
+  const warningTexts = (Array.isArray(m.warnings) ? m.warnings : [])
+    .map(warningText)
+    .filter(Boolean);
+  if (warningTexts.length) {
+    lines.push(`**Needs attention**: ${warningTexts.join('; ')}`, '');
+  }
 
   if (m.server) {
     const call = m.mode === 'code'
