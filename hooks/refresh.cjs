@@ -26,9 +26,12 @@
 //                               (server-side fast path; opt-in until the live
 //                               gateway ships the param — an unknown param on a
 //                               strict schema would otherwise reject the call)
-//   BIFROST_MEMORY_WARN_THRESHOLD — count a `_system_warnings` entry must reach
-//                               before it is cached for injection (default 50);
-//                               see extractSystemWarnings/actionableWarnings below
+//   BIFROST_MEMORY_WARN_THRESHOLD — fallback count a `_system_warnings` entry must
+//                               reach before it is cached for injection, for any
+//                               warning type with no tuned bound of its own
+//   BIFROST_MEMORY_WARN_THRESHOLD_<TYPE> — per-type override, e.g.
+//                               BIFROST_MEMORY_WARN_THRESHOLD_STALE_MEMORIES=200;
+//                               see DEFAULT_WARN_THRESHOLDS/actionableWarnings below
 // We query with a wider k than we intend to keep, then greedily fill the
 // budget from the highest-similarity results first, giving higher-scored
 // facts a larger snippet allowance instead of a flat per-fact truncation.
@@ -39,9 +42,8 @@
 // non-fact; see its comment). We are the one component that talks to memory_search
 // on every session, so we are the only place that can notice. Surfacing every
 // warning unconditionally would become wallpaper across ~60 agents mostly mid-task
-// on unrelated work, so only warnings that clear BIFROST_MEMORY_WARN_THRESHOLD (for
-// count-bearing warnings like staleness) or that carry no count at all (a
-// presence-is-the-signal warning, e.g. a dead/failed queue entry) get cached.
+// on unrelated work, so each type has to clear its own bound before it gets cached
+// (DEFAULT_WARN_THRESHOLDS below).
 // Deliberately NOT a memory_call(action="meta.stats") round trip: the "the
 // session-start refresh never calls memory_call" test pins refresh.cjs to
 // memory_search alone, and this data already rides along for free on that call.
@@ -64,11 +66,26 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
 const DEFAULT_MIN_SIM = 0;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
-// 181 memories sitting unflagged for three weeks (the incident that motivated this)
-// is well past due; single-digit/low-double-digit staleness is normal churn in a
-// corpus this many agents write to continuously. 50 catches a real backlog early
-// without nagging on ordinary drift.
-const DEFAULT_WARN_THRESHOLD = 50;
+// Per warning type, because the three luca-memory actually emits
+// (memory_lib.get_system_warnings: pending_contradictions, stale_memories,
+// unprocessed_staged) all carry a numeric count and none of their counts mean the
+// same thing. One shared bound cannot serve them: at 50 it muted
+// pending_contradictions outright — a single unresolved contradiction is two
+// memories asserting opposite things, actionable at count 1 and never reaching 50.
+//   pending_contradictions: 1  — the corpus is self-inconsistent; always say so.
+//   stale_memories: 50 — 181 unflagged for three weeks (the incident that motivated
+//     this) is well past due; single/low-double-digit staleness is ordinary churn in
+//     a corpus this many agents write to continuously.
+//   unprocessed_staged: 10 — one or two staged sessions is just a session that ended;
+//     a double-digit pile means /coach has not run in a long while.
+const DEFAULT_WARN_THRESHOLDS = {
+  pending_contradictions: 1,
+  stale_memories: 50,
+  unprocessed_staged: 10,
+};
+// Fallback bound for a warning type luca-memory grows later that has no tuned
+// default here yet. Better to over-report an unknown type once than to swallow it.
+const DEFAULT_WARN_THRESHOLD = 1;
 // How long facts may be carried forward across empty refreshes before we stop
 // injecting them. Bounds retention when a gateway stays broken.
 const MAX_CARRY_FORWARD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -88,7 +105,6 @@ const SNIPPET_LEN = envInt('BIFROST_MEMORY_SNIPPET_LEN', DEFAULT_SNIPPET_LEN);
 const BUDGET_CHARS = envInt('BIFROST_INJECT_BUDGET', DEFAULT_BUDGET_CHARS);
 const MIN_SIM = envFloat('BIFROST_MEMORY_MIN_SIM', DEFAULT_MIN_SIM);
 const USE_FAST = process.env.BIFROST_MEMORY_FAST === '1';
-const WARN_THRESHOLD = envInt('BIFROST_MEMORY_WARN_THRESHOLD', DEFAULT_WARN_THRESHOLD);
 
 function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
@@ -183,13 +199,28 @@ function extractSystemWarnings(text) {
   return [];
 }
 
-// Threshold gate: a warning with a numeric `count` (e.g. stale_memories) only clears
-// the bar at BIFROST_MEMORY_WARN_THRESHOLD or above — ordinary corpus churn stays
-// silent. A warning with no numeric count has nothing to threshold against and is
-// treated as inherently actionable (a failed/dead queue entry does not become less
-// true at a smaller count; there is no count).
+// The bound one warning type must clear, most specific source first:
+// BIFROST_MEMORY_WARN_THRESHOLD_<TYPE>, then the global BIFROST_MEMORY_WARN_THRESHOLD
+// (a single knob for an operator who wants uniform quiet), then the type's tuned
+// default, then DEFAULT_WARN_THRESHOLD. Read per call rather than at module load so
+// a caller can set the env and see it take effect.
+function warnThreshold(type) {
+  const tuned = Object.prototype.hasOwnProperty.call(DEFAULT_WARN_THRESHOLDS, type)
+    ? DEFAULT_WARN_THRESHOLDS[type]
+    : DEFAULT_WARN_THRESHOLD;
+  const global = envInt('BIFROST_MEMORY_WARN_THRESHOLD', tuned);
+  const key = String(type || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return key ? envInt(`BIFROST_MEMORY_WARN_THRESHOLD_${key}`, global) : global;
+}
+
+// Threshold gate: a count-bearing warning clears its own type's bar or stays silent.
+// Every type luca-memory emits today carries a count; a hypothetical future type
+// without one has nothing to compare against, so it is kept rather than silently
+// dropped — a bad reason to show something beats no reason to hide it.
 function actionableWarnings(warnings) {
-  return warnings.filter((w) => typeof w.count !== 'number' || w.count >= WARN_THRESHOLD);
+  return warnings.filter(
+    (w) => typeof w.count !== 'number' || w.count >= warnThreshold(w.type)
+  );
 }
 
 // Last resort: regex-scan raw "content":"..." pairs when the response isn't

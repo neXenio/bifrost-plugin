@@ -340,8 +340,8 @@ function factText(f) {
   return (f && typeof f.content === 'string') ? f.content : '';
 }
 
-// Warnings are cached as {type, count, message} — refresh.cjs already applied
-// BIFROST_MEMORY_WARN_THRESHOLD, so anything present here is meant to render.
+// Warnings are cached as {type, count, message} — refresh.cjs already held each type
+// to its own bound, so anything present here is meant to render.
 // `message` is luca-memory's own wording; a future warning type shipped without one
 // falls back to `<count> <type>` rather than being dropped silently.
 function warningText(w) {
@@ -387,7 +387,7 @@ function emitMemory(cache, cfg, use) {
 
   const lines = ['', `## Bifrost memory — ${size}`, ''];
 
-  // Maintenance backlog, thresholded by refresh.cjs (BIFROST_MEMORY_WARN_THRESHOLD).
+  // Maintenance backlog, thresholded per warning type by refresh.cjs.
   // Nothing here when the corpus is healthy; one short line when it isn't.
   const warningTexts = (Array.isArray(m.warnings) ? m.warnings : [])
     .map(warningText)

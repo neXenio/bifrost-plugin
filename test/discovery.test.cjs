@@ -1862,12 +1862,13 @@ test('the session-start refresh never calls memory_call', () => {
     'refresh.cjs must reach the gateway with memory_search alone');
 });
 
-// --- luca-memory maintenance warnings (BIFROST_MEMORY_WARN_THRESHOLD) -------------
+// --- luca-memory maintenance warnings (per-type thresholds) ----------------------
 // luca-memory appends a `{"_system_warnings":[...]}` entry to every memory_search
-// response to advertise maintenance it never performs itself (stale facts, a
-// stuck ingest queue, ...). refresh.cjs extracts it, thresholds it, and caches only
-// what merits interrupting a session; session-start renders whatever survives that
-// as a single short line.
+// response to advertise maintenance it never performs itself. It emits exactly three
+// types (memory_lib.get_system_warnings): pending_contradictions, stale_memories and
+// unprocessed_staged, each with a numeric `count`. refresh.cjs extracts the entry,
+// holds each type to its own bound, and caches only what merits interrupting a
+// session; session-start renders whatever survives that as a single short line.
 
 const { extractSystemWarnings, actionableWarnings } = require('../hooks/refresh.cjs');
 
@@ -1918,9 +1919,72 @@ test('actionableWarnings drops a count-bearing warning below threshold, keeps on
   assert.deepStrictEqual(dropped, []);
 });
 
-test('actionableWarnings always keeps a warning with no numeric count', () => {
-  // A failed/dead queue entry does not get less true at a smaller count — there is
-  // no count to threshold against, so presence alone is the signal.
+test('a single pending contradiction survives the staleness bound', () => {
+  // Two memories asserting opposite things is actionable at count 1 and will never
+  // reach the staleness bound, so one shared threshold muted it permanently.
+  const kept = actionableWarnings([
+    { type: 'pending_contradictions', count: 1, message: '1 contradiction(s) pending — run /coach to resolve' },
+  ]);
+  assert.strictEqual(kept.length, 1);
+});
+
+test('each warning type is held to its own bound, not one shared number', () => {
+  const kept = actionableWarnings([
+    { type: 'pending_contradictions', count: 1 },
+    { type: 'stale_memories', count: 3 },
+    { type: 'unprocessed_staged', count: 2 },
+    { type: 'stale_memories', count: 181 },
+    { type: 'unprocessed_staged', count: 12 },
+  ]);
+  assert.deepStrictEqual(
+    kept.map((w) => [w.type, w.count]),
+    [['pending_contradictions', 1], ['stale_memories', 181], ['unprocessed_staged', 12]]
+  );
+});
+
+test('a warning type with no tuned bound is reported rather than swallowed', () => {
+  // Anything luca-memory grows later: better to over-report it once than to hide it
+  // behind a number that was never chosen for it.
+  const kept = actionableWarnings([{ type: 'ingest_queue_dead', count: 1 }]);
+  assert.strictEqual(kept.length, 1);
+});
+
+test('BIFROST_MEMORY_WARN_THRESHOLD_<TYPE> overrides just that type', () => {
+  const prev = process.env.BIFROST_MEMORY_WARN_THRESHOLD_STALE_MEMORIES;
+  process.env.BIFROST_MEMORY_WARN_THRESHOLD_STALE_MEMORIES = '200';
+  try {
+    assert.deepStrictEqual(actionableWarnings([{ type: 'stale_memories', count: 181 }]), []);
+    assert.strictEqual(
+      actionableWarnings([{ type: 'pending_contradictions', count: 1 }]).length, 1,
+      'a per-type override must not move any other type'
+    );
+  } finally {
+    if (prev === undefined) delete process.env.BIFROST_MEMORY_WARN_THRESHOLD_STALE_MEMORIES;
+    else process.env.BIFROST_MEMORY_WARN_THRESHOLD_STALE_MEMORIES = prev;
+  }
+});
+
+test('the global BIFROST_MEMORY_WARN_THRESHOLD still works as a single quiet knob', () => {
+  const prev = process.env.BIFROST_MEMORY_WARN_THRESHOLD;
+  process.env.BIFROST_MEMORY_WARN_THRESHOLD = '500';
+  try {
+    assert.deepStrictEqual(
+      actionableWarnings([
+        { type: 'pending_contradictions', count: 1 },
+        { type: 'stale_memories', count: 181 },
+      ]),
+      []
+    );
+  } finally {
+    if (prev === undefined) delete process.env.BIFROST_MEMORY_WARN_THRESHOLD;
+    else process.env.BIFROST_MEMORY_WARN_THRESHOLD = prev;
+  }
+});
+
+test('actionableWarnings keeps a warning with no numeric count', () => {
+  // Not a shape luca-memory emits — all three of its types carry a count. A future
+  // type without one has nothing to compare against, so it is kept rather than
+  // silently dropped by a `undefined >= n` comparison.
   const kept = actionableWarnings([
     { type: 'ingest_queue_dead', message: 'ingest queue has a dead entry' },
   ]);
