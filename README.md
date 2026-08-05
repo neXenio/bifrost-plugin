@@ -178,6 +178,45 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_REFRESH_INTERVAL_MS` | Minimum interval between background gateway refreshes | `3600000` (1 hour) |
 | `BIFROST_ALLOW_HTTP` | Set to `1` to let hooks contact a plain-HTTP gateway on a non-loopback host (legacy private-network deployments — the key crosses the wire unencrypted) | (off — HTTPS or loopback only) |
 
+### Pre-approving the gateway's tools
+
+By default Claude Code asks for permission the first time it calls each gateway
+tool. A gateway exposes a lot of them, so that is a lot of prompts. To approve
+the whole server once, add this to `~/.claude/settings.json` (all your projects)
+or to `.claude/settings.json` in one repo:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_bifrost-plugin_bifrost",
+      "mcp__bifrost"
+    ]
+  }
+}
+```
+
+A bare `mcp__<server>` rule covers every tool on that server; `mcp__<server>__<tool>`
+narrows it to one. Both names are listed above because the server is called
+`bifrost` when its `.mcp.json` is picked up as a project MCP server and
+`plugin_bifrost-plugin_bifrost` when it arrives through the plugin — run `/mcp`
+to see which one you have. Extra rules for a server you do not have are inert.
+
+Two caveats worth knowing before you rely on this:
+
+- **The plugin cannot ship this for you.** A plugin manifest may only carry
+  `agent` and `subagentStatusLine` settings; a `permissions` block in
+  `plugin.json` passes `claude plugin validate` and is then silently dropped at
+  load time, so it looks applied and is not. Granting tool permission stays a
+  decision on your side of the boundary, which is the right default — it just
+  means this snippet is a manual step.
+- **This is Claude Code only.** Claude Desktop and claude.ai gate tools through
+  their own approval UI and do not read `settings.json`. On those surfaces,
+  approve the server when prompted.
+
+For a fleet, the same block goes in the managed settings file your MDM deploys,
+which also stops individual users from removing it.
+
 ### Running your own gateway
 
 The plugin works against any Bifrost gateway — point `BIFROST_URL` at it. The only
@@ -301,8 +340,10 @@ source ~/.zshrc
 The plugin ships a `.mcp.json`, so the `bifrost` MCP server wires itself from
 the gateway URL and virtual key you enter in the install-time plugin config
 prompt, no installer script and no shell env vars needed. It ships
-**disabled** (`defaultEnabled: false`) so it stays dormant until you enable
-it. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
+**enabled** (`defaultEnabled: true`), so installing it activates it right
+away. Leave the virtual key blank at the install prompt and it stays inert —
+no key means no gateway connection. `/plugin disable bifrost-plugin` turns it
+off. Type **"set up bifrost"** or `/bifrost-onboard` for a guided walkthrough,
 `/bifrost-debug` if something's off.
 
 ### Gateway skill discovery vs Bifrost Skills Repository
@@ -355,6 +396,21 @@ node bin/install.js --dry-run             # prints the claude mcp add command in
 | `bifrost-debug` | "bifrost not working", "mcp not connecting", "skills not found" |
 | `bifrost-mcp-setup` | "manually add bifrost mcp", "edit mcp.json for bifrost", "installer failed" |
 | `bifrost-code-mode` | "executeToolCode", "code mode", "listToolFiles", "how do I call gitlab through the gateway" |
+| `bifrost-gateway-essentials` | Always loaded — carries the core operating rules for surfaces where hooks don't run |
+
+`bifrost-gateway-essentials` exists for a specific gap. The SessionStart hook
+injects a gateway-specific context block naming your real servers, skill library
+and memory corpus, but hooks run only in the Claude Code CLI and in Desktop's Code
+and Cowork tabs. On Desktop's Chat tab and on claude.ai web, nothing is injected.
+Skill descriptions are loaded on every surface whether or not the skill is
+invoked, so that skill's description carries the parts that matter most —
+above all that a missing `mcp__bifrost__<server>-<tool>` usually means the
+capability is in code mode behind `executeToolCode`, not that it is absent.
+
+That is a partial substitute, not an equal one. A description can state the shape;
+it cannot name your gateway's actual servers, because those are discovered at
+runtime. The gateway's own MCP tool descriptions are served by the upstream MCP
+servers and are not something this plugin can rewrite.
 
 ---
 

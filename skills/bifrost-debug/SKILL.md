@@ -206,6 +206,8 @@ client ID field.
 | `Policy 'Trusted Hosts' rejected request to client-registration service. Details: Host not trusted.` | Keycloak's realm Trusted Hosts policy blocks direct client registration | Identity-provider side. Ask the operator to relax Trusted Hosts for loopback, or provide a client ID |
 | Desktop: stuck at "Needs authentication" after entering an OAuth client ID | Identity provider has not allowlisted `http://localhost:51789/callback` as a redirect URI for that client | Operator: add the redirect URI to the client |
 | Desktop: `no_virtual_key` after a successful login | Authenticated but not yet in the gateway's VK map | Operator: assign the user a virtual key |
+| Permission prompt on every gateway tool | Normal Claude Code behaviour — no rule pre-approves the server | Add `"mcp__plugin_bifrost-plugin_bifrost"` (and/or `"mcp__bifrost"`) to `permissions.allow` in `~/.claude/settings.json`. The plugin cannot ship this: a plugin manifest may only carry `agent` and `subagentStatusLine` settings, and a `permissions` block there validates but is dropped at load |
+| Tool exists on the gateway but not in your tool list | Server is code-mode, not flat | Call it via `executeToolCode`; `listToolFiles()` to discover. See `/bifrost-code-mode` |
 
 For manual MCP wiring: `/bifrost-mcp-setup`.
 For fresh onboarding: `/bifrost-onboard`.

@@ -5,13 +5,17 @@ and what must be true **on the gateway side** first. The plugin is deliberately
 gateway-agnostic and safe-by-default; the gating work for a big rollout is
 infrastructure, not the plugin.
 
-## Plugin readiness (v1.2.0)
+## Plugin readiness (v1.5.0)
 
-- **No secrets in the repo.** `.mcp.json` uses `${BIFROST_URL}` / `${BIFROST_VK}`
-  env placeholders; each user supplies their own key. Verified by secret scan.
-- **Ships disabled** (`defaultEnabled: false` on the marketplace plugin entry) —
-  installing does nothing until a user sets their key and enables it. No
-  surprise connections.
+- **No secrets in the repo.** `.mcp.json` uses `${user_config.gateway_url}` /
+  `${user_config.virtual_key}` placeholders, filled from the install-time plugin
+  config prompt; each user supplies their own key. Verified by secret scan.
+- **Ships enabled** (`defaultEnabled: true` on the marketplace plugin entry) —
+  installing activates the plugin immediately. What gates a connection is the
+  key, not the enable flag: a user who leaves the virtual key blank at the
+  install prompt gets an inert plugin with no gateway traffic. Org admins who
+  want installs dormant regardless should flip this to `false` before importing
+  the marketplace.
 - **Session start never blocks.** The SessionStart hook does zero synchronous
   network I/O: it reads a per-project cache (sub-ms). At most once per hour it
   spawns a detached worker that contacts the gateway to refresh that cache —
@@ -87,13 +91,15 @@ These are **not** solved by the plugin and must be in place first:
   saturation and `memory_search`/`skill_search` latency under real concurrency.
 - **Waves** of ~30–50, monitoring gateway load between waves.
 - **Full fleet** once latency holds under load.
-- **Rollback**: `defaultEnabled: false` means new installs are inert; to pull back,
-  push `/plugin disable bifrost-plugin` guidance or unpublish the marketplace entry.
-  Nothing the plugin does is destructive to a user's environment.
+- **Rollback**: push `/plugin disable bifrost-plugin` guidance or unpublish the
+  marketplace entry. Since the plugin ships `defaultEnabled: true`, new installs
+  are active, so unpublishing stops new installs but does not disable existing
+  ones — plan a disable broadcast, not just an unpublish. Nothing the plugin does
+  is destructive to a user's environment.
 
 ## Go / no-go
 
-- Plugin: **ready** (v1.0.0).
+- Plugin: **ready** (v1.5.0).
 - Distribution to 300: **gated on gateway prerequisites 1–5 above.** Ship to the
   pilot first; do not fan out to 300 until the memory/skill server is proven under
   concurrent load.

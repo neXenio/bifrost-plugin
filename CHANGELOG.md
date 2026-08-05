@@ -2,6 +2,50 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.6.0] — 2026-08-05
+
+### Added
+
+- **`bifrost-gateway-essentials` skill.** The SessionStart hook injects a
+  gateway-specific context block, but hooks run only in the Claude Code CLI and
+  in Claude Desktop's Code and Cowork tabs — Desktop's Chat tab and claude.ai web
+  get nothing. Skill descriptions are loaded on every surface whether or not the
+  skill is invoked, so this skill's description carries the core operating rules,
+  chiefly that a missing `mcp__bifrost__<server>-<tool>` usually means the
+  capability sits in code mode behind `executeToolCode` rather than being absent.
+  A partial substitute, not an equal one: a static description cannot name the
+  servers your gateway actually exposes, and the gateway's own MCP tool
+  descriptions are served by the upstream MCP servers, which this plugin does not
+  control.
+- **Documented how to pre-approve the gateway's tools.** New README section with
+  the `permissions.allow` block for `~/.claude/settings.json`, covering both
+  server names (`mcp__plugin_bifrost-plugin_bifrost` for the plugin install,
+  `mcp__bifrost` for the project-MCP install) and the managed-settings variant for
+  fleets. Also added to the `bifrost-debug` symptom map.
+
+### Fixed
+
+- **Corrected the `defaultEnabled` documentation.** README and DISTRIBUTION.md
+  both stated the plugin "ships disabled (`defaultEnabled: false`)", while
+  `marketplace.json` has carried `defaultEnabled: true` since 2026-07-24 (commit
+  `2f66736`) across six releases. The manifest is the intended behaviour and the
+  docs were wrong. What gates a connection is the virtual key, not the enable
+  flag: an install with the key left blank is inert. DISTRIBUTION.md's rollback
+  guidance was rewritten accordingly — unpublishing the marketplace entry stops
+  new installs but does not disable existing ones. Also corrected DISTRIBUTION.md's
+  two stale version numbers (v1.2.0 in the header, v1.0.0 in go/no-go) and its
+  claim that `.mcp.json` still uses `${BIFROST_URL}` / `${BIFROST_VK}` env
+  placeholders, which 1.5.0 replaced with `userConfig` templates.
+
+### Notes
+
+- A plugin **cannot** ship permission rules. `.claude-plugin/plugin.json` accepts
+  a `settings` record and `claude plugin validate --strict` passes a `permissions`
+  block inside it, but the loader picks only `agent` and `subagentStatusLine` and
+  silently drops everything else — so such a block looks applied and is not.
+  Verified against Claude Code 2.1.222. Pre-approval therefore stays a manual step
+  on the user's side, which is also the right boundary.
+
 ## [1.5.0] — 2026-08-04
 
 ### Added
