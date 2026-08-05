@@ -135,24 +135,34 @@ During the stale window, calls can still succeed if you pass the upstream's new
 arguments explicitly: the upstream server validates the call, not the gateway's
 cached catalog.
 
-## 8. Collective luca-memory is unexpectedly writing locally
+## 8. The memory server is older than luca-memory v0.42
 
-luca-memory v0.40 has two deployment modes. The Bifrost company corpus must run with
-`MEMORY_DEPLOYMENT_MODE=collective`: `memory_store(subject=..., valid_from=..., text=...)`
-then returns `{"status":"pending","candidate_id":"..."}` and does **not** write the
-fact directly. `queued` or `stored` means the service is operating in local/private
-mode, so do not call the result shared company knowledge.
+**This plugin requires luca-memory v0.42 or later.** v0.42 was a breaking release with
+no compatibility aliases, and the plugin sends only the v0.42 argument shape. Against an
+older server every memory call is rejected, so session-start memory injection goes
+silently empty and the corpus size line disappears.
 
-Collective mode also requires Bifrost to inject the authenticated virtual-key identity
-as `x-bifrost-vk-id` to the upstream luca-memory request. A missing header fails closed
-with an error naming the trusted Bifrost VK identity. The declarative client entry is
-`mcp-clients/clients.json` in the gateway repo.
+Tell the versions apart from the tool list alone — the memory server sits upstream of
+the gateway and advertises no version string. v0.42 exposes exactly three memory tools
+(`memory_store`, `memory_search`, `memory_call`); earlier versions expose fourteen.
+These signals also mean the server predates v0.42:
 
-Do **not** use Bifrost's `allowed_extra_headers` to forward a caller-supplied
-`x-bifrost-vk-id`: that would let a caller forge a voter identity. Bifrost v1.5.16's
-MCP client configuration can forward allowlisted caller headers but cannot derive the
-validated VK ID into a new header. This needs a trusted gateway-side extension/proxy,
-then a public `tools/list` recheck after the catalog refresh.
+- `memory_search` rejects `limit` or `filters` (it wants `k` and a flat `wing`).
+- `memory_store` returns `{"status":"pending","candidate_id":"..."}` — the old
+  collective-review staging, removed in v0.42 along with `MEMORY_DEPLOYMENT_MODE`, the
+  candidate/voting ledger and the `x-bifrost-vk-id` identity header.
+- `memory_store` fails demanding a trusted Bifrost VK identity.
+- `memory_stats` / `memory_get_body` / `memory_list_subjects` exist as their own tools.
+
+**Fix:** upgrade the upstream luca-memory to v0.42 or later, then restart the Bifrost
+gateway process so its published tool catalog picks up the new schema (see section 7 —
+a restart of the upstream alone does not refresh the catalog).
+
+Do **not** work around a v0.40 identity-header failure by adding `x-bifrost-vk-id` to
+Bifrost's `allowed_extra_headers`. That mechanism forwards a header the caller already
+sent, so allowlisting it lets any caller assert any identity. Bifrost knows the
+validated VK ID server-side but does not copy it into the MCP extra headers. Upgrading
+removes the gate entirely and is the real fix.
 
 ## 9. Claude Desktop OAuth does not complete
 

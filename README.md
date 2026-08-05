@@ -169,7 +169,7 @@ match if your gateway does not use the default `skills`.
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `BIFROST_KB_WING` | Knowledgebase wing/scope passed as `wing=` to the memory server's `memory_search` | (unset — KB recall skipped) |
+| `BIFROST_KB_WING` | Knowledgebase wing/scope narrowing the memory server's `memory_search`, sent as `filters={"wing": …}` | (unset — KB recall skipped) |
 | `BIFROST_KB_QUERY` | Query string used for the KB recall (falls back to the per-project memory query) | project-derived query |
 | `BIFROST_KB_INJECT` | Set to `0` to disable the KB recall header at session start | (enabled) |
 | `BIFROST_MEMORY_INJECT` | Set to `0` to disable the memory recall header at session start | (enabled) |
@@ -385,6 +385,10 @@ node bin/install.js --dry-run             # prints the claude mcp add command in
 - Node.js >= 18
 - Claude Code, or Claude Desktop, or claude.ai on the web
 - Your gateway's `/mcp` endpoint and a virtual key from your gateway operator, entered at the install prompt
+- If your gateway exposes a luca-memory server: **v0.42 or later**. v0.42 renamed and
+  folded its tools with no compatibility aliases, and the plugin sends only that shape.
+  Against an older server the memory features go silently empty — `/bifrost-debug`
+  section 8 covers how to spot it. Skills and the rest of the gateway are unaffected.
 
 ---
 

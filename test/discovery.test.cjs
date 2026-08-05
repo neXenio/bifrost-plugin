@@ -480,8 +480,8 @@ test('recalled facts are printed inside the untrusted-data fence', () => {
 test('structured memory provenance is readable in the injected fact', () => {
   const parsed = parseStructured(JSON.stringify([
     {
-      fact: 'The gateway catalog is captured at process start.',
-      authority: 0.61,
+      content: 'The gateway catalog is captured at process start.',
+      relevance: 0.61,
       provenance: {
         subject: 'Bifrost gateway',
         wing: 'team',
@@ -493,7 +493,7 @@ test('structured memory provenance is readable in the injected fact', () => {
     { _system_warnings: [{ type: 'stale_memories', count: 1 }] },
   ]));
   assert.strictEqual(parsed.length, 1, 'system warning elements are not facts');
-  assert.strictEqual(parsed[0].similarity, 0.61, 'authority is the structured score');
+  assert.strictEqual(parsed[0].similarity, 0.61, 'relevance is the structured score');
 
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
@@ -1228,32 +1228,51 @@ test('a large payload survives a piped run without truncation', () => {
   assert.match(r.stdout, /<\/untrusted-reference-data>/, 'the tail of the payload must arrive');
 });
 
-test('the candidate spool explains collective server-side promotion', () => {
+test('the candidate spool is presented as staging, never as the record', () => {
   // A write path whose output nothing reads is not a loop. The review command is what
-  // makes a candidate promotable rather than merely recorded.
+  // moves a candidate into shared memory rather than leaving it merely recorded.
   const cmd = path.join(ROOT, 'commands', 'bifrost-candidates.md');
   assert.ok(fs.existsSync(cmd), 'a review command must ship with the spool');
   const body = fs.readFileSync(cmd, 'utf8');
   assert.match(body, /candidates\.md/, 'must name the file it reads');
-  assert.match(body, /server—not this\s+local file—governs collective promotion/i);
-  assert.match(body, /"status":"pending"/,
-    'collective acceptance must not be presented as a direct write');
-  assert.match(body, /candidate_id/,
-    'a collective candidate must remain traceable while unresolved');
+  assert.match(body, /server—not this\s+local file—holds the shared corpus/i);
+  // v0.42 removed the collective review, so this command is the only gate left.
+  assert.match(body, /this gate is the only one/i);
+  // Reporting a submission that never landed prunes the spool entry and loses it.
+  assert.match(body, /"status":"stored"/);
+  assert.match(body, /"status":"queued"/);
+  assert.match(body, /"status":"skipped","reason":"noise"/);
+  assert.match(body, /say so rather than reporting the submission as done/);
 });
 
-test('memory write guidance carries the v0.40 structured-claim contract', () => {
+test('memory write guidance carries the v0.42 structured-claim contract', () => {
+  // Guidance that still teaches `valid_from` or `k` produces calls the server rejects.
   const context = fs.readFileSync(path.join(ROOT, 'guidance', 'bifrost-context.md'), 'utf8');
   const candidates = fs.readFileSync(path.join(ROOT, 'commands', 'bifrost-candidates.md'), 'utf8');
-  for (const field of ['subject', 'valid_from', 'text']) {
+  for (const field of ['subject', 'text']) {
     assert.match(context, new RegExp(`\\b${field}\\b`));
     assert.match(candidates, new RegExp(`\\b${field}\\b`));
   }
-  assert.match(context, /advertised `memory_store` schema/);
-  assert.match(context, /application `tenant` was removed/);
-  assert.match(candidates, /current time/);
-  assert.match(candidates, /"status":"queued"/);
-  assert.match(candidates, /"status":"pending"/);
+  assert.match(context, /advertised schema/,
+    'the schema on the wire outranks anything written here');
+  assert.match(context, /memory_search\(query, limit/,
+    'the search signature must name limit, since k is gone');
+  assert.match(context, /Do not send `valid_from`/);
+  assert.match(context, /`tenant`, `role` and `vk` are schema errors/);
+  assert.match(context, /memory_call\(action=\.\.\., request=\.\.\.\)/,
+    'the folded tools must be reachable, not merely reported missing');
+  assert.match(context, /`evolve\.\*` changes the\s+corpus, `meta\.\*` only reads it/,
+    'the namespace prefix is the write/read contract and must be stated');
+  // Presenting three co-equal tools invites meta calls in the hot loop.
+  assert.match(context, /Those two are the whole of normal use/);
+  assert.match(context, /not as part of a normal recall-then-store loop/);
+  assert.match(candidates, /Do not send `valid_from`/);
+
+  // Scoped to memory_search: skill_search is a different server and still takes `k`.
+  for (const [name, body] of [['bifrost-context', context], ['candidates', candidates]]) {
+    assert.doesNotMatch(body, /memory_search\([^)]*\bk=/,
+      `${name} must not teach memory_search's removed k= argument`);
+  }
 });
 
 test('the debug skill explains stale gateway catalogs', () => {
@@ -1263,9 +1282,23 @@ test('the debug skill explains stale gateway catalogs', () => {
   assert.match(debug, /gateway process started/);
   assert.match(debug, /restart the Bifrost gateway process/);
   assert.match(debug, /new\s+arguments explicitly/);
-  assert.match(debug, /MEMORY_DEPLOYMENT_MODE=collective/);
+  // The impersonation warning outlives the mode that prompted it.
   assert.match(debug, /x-bifrost-vk-id/);
   assert.match(debug, /allowed_extra_headers/);
+  assert.match(debug, /any caller assert any identity/);
+});
+
+test('the debug skill states the memory version floor and how to detect a breach', () => {
+  // The refresh worker logs nothing, so the only symptom is an empty memory section —
+  // which reads as "the gateway is broken" unless the skill names the real cause.
+  const debug = fs.readFileSync(path.join(ROOT, 'skills', 'bifrost-debug', 'SKILL.md'), 'utf8');
+  assert.match(debug, /requires luca-memory v0\.42 or later/i);
+  assert.match(debug, /silently empty/);
+  // The tool count is the only client-side version tell.
+  assert.match(debug, /three memory tools/);
+  assert.match(debug, /fourteen/);
+  assert.match(debug, /upgrade the upstream luca-memory/i);
+  assert.match(debug, /restart the Bifrost gateway process/);
 });
 
 test('state paths follow HOME so they can be isolated', () => {
@@ -1745,4 +1778,86 @@ test('sameEndpoint never calls an unparseable string equal to a real url', () =>
   assert.ok(!gw.sameEndpoint('http://h/mcp', 'https://h/mcp'));
   assert.ok(!gw.sameEndpoint('not a url', 'https://h/mcp'));
   assert.ok(!gw.sameEndpoint('', 'https://h/mcp'));
+});
+
+// --- luca-memory v0.42 memory contract -------------------------------------------
+
+const { searchFacts } = require('../hooks/refresh.cjs');
+
+function recordingGateway(calls, reply) {
+  return async (_cap, tool, args) => {
+    calls.push({ tool, args });
+    return reply;
+  };
+}
+
+async function withStubbedGateway(impl, fn) {
+  const original = gw.callCapability;
+  gw.callCapability = impl;
+  try { return await fn(); } finally { gw.callCapability = original; }
+}
+
+test('memory recall sends the v0.42 argument shape and only that', async () => {
+  const calls = [];
+  const hit = JSON.stringify([{ content: 'a fact', relevance: 0.9 }]);
+  const facts = await withStubbedGateway(recordingGateway(calls, hit),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'why is this slow', null));
+  assert.strictEqual(facts.length, 1);
+  assert.strictEqual(calls.length, 1, 'one call — no retry with an older spelling');
+  assert.strictEqual(calls[0].args.limit, 12);
+  assert.ok(!('k' in calls[0].args), '`k` was renamed in v0.42 and must not be sent');
+});
+
+test('the KB wing rides inside `filters`, never as a top-level argument', async () => {
+  // Sent flat, a validating server rejects the whole call, so KB recall goes silent
+  // rather than merely unscoped.
+  const calls = [];
+  await withStubbedGateway(recordingGateway(calls, JSON.stringify([])),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', 'knowledgebase'));
+  assert.deepStrictEqual(calls[0].args.filters, { wing: 'knowledgebase' });
+  assert.ok(!('wing' in calls[0].args), 'v0.42 takes no top-level wing');
+});
+
+test('an older memory server yields no facts rather than a crash', async () => {
+  const calls = [];
+  const rejection = JSON.stringify({ error: "unexpected keyword argument 'limit'" });
+  const facts = await withStubbedGateway(recordingGateway(calls, rejection),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', null));
+  assert.deepStrictEqual(facts, []);
+  assert.strictEqual(calls.length, 1);
+});
+
+test('search results are scored from the v0.42 `relevance` field', () => {
+  // budgetFill drops anything it cannot score, so an unrecognized score field empties
+  // the memory section rather than merely misordering it.
+  const parsed = parseStructured(JSON.stringify([
+    { content: 'scored by relevance', relevance: 0.77 },
+  ]));
+  assert.strictEqual(parsed.length, 1);
+  assert.strictEqual(parsed[0].similarity, 0.77);
+});
+
+test('provenance is appended to a v0.42 hit, which names its content `content`', () => {
+  // Provenance used to ride only on the pre-v0.42 `fact` field.
+  const parsed = parseStructured(JSON.stringify([
+    {
+      content: 'The gateway catalog is captured at process start.',
+      relevance: 0.61,
+      provenance: { subject: 'Bifrost gateway', wing: 'team' },
+    },
+  ]));
+  assert.strictEqual(parsed.length, 1);
+  assert.match(parsed[0].content, /Provenance: subject=Bifrost gateway, wing=team/);
+});
+
+test('the session-start refresh never calls memory_call', () => {
+  // memory_call is the advanced surface. Every session pays for what the refresh does,
+  // and the corpus-size header is not worth a dependency on the meta namespace.
+  const src = fs.readFileSync(path.join(ROOT, 'hooks', 'refresh.cjs'), 'utf8');
+  const code = src
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+  assert.doesNotMatch(code, /['"`]memory_call['"`]/,
+    'refresh.cjs must reach the gateway with memory_search alone');
 });

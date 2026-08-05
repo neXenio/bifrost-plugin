@@ -87,11 +87,11 @@ function formatProvenance(provenance) {
 }
 
 // Best-effort structured parse of a memory_search response: an array of
-// {content|text|fact, similarity|score|authority[, provenance]} objects,
-// optionally wrapped in {results:[...]} / {matches:[...]} / {facts:[...]}.
-// Non-fact elements such as {_system_warnings:[...]} are ignored. Returns null
-// (not an array) if the shape isn't recognized, so callers can fall back to
-// the legacy regex scan.
+// {content|text, relevance|similarity|score[, provenance]} objects, optionally
+// wrapped in {results:[...]} / {matches:[...]} / {facts:[...]}. Non-fact elements
+// such as {_system_warnings:[...]} are ignored. Returns null (not an array) if the
+// shape isn't recognized, so callers can fall back to the legacy regex scan.
+// `similarity`/`score` are other gateways' spellings, not luca-memory compatibility.
 function parseStructured(text) {
   if (!text) return null;
   let data;
@@ -107,31 +107,28 @@ function parseStructured(text) {
       if (typeof item === 'string') return { content: clean(item), similarity: null };
       if (!item || typeof item !== 'object') return null;
       let content = item.content != null ? item.content : item.text;
-
-      if (!content && item.fact) {
-        content = item.fact;
-        const provenance = formatProvenance(item.provenance);
-        if (provenance) content = `${content} (Provenance: ${provenance})`;
-      }
-
       if (!content) return null;
-      const simRaw = typeof item.similarity === 'number' ? item.similarity
+
+      const provenance = formatProvenance(item.provenance);
+      if (provenance) content = `${content} (Provenance: ${provenance})`;
+
+      const simRaw = typeof item.relevance === 'number' ? item.relevance
+        : typeof item.similarity === 'number' ? item.similarity
         : typeof item.score === 'number' ? item.score
-        : typeof item.authority === 'number' ? item.authority
         : null;
       return { content: clean(content), similarity: simRaw };
     })
     .filter((r) => r && r.content);
 }
 
-// Legacy fallback: regex-scan raw "content":"..." pairs when the response
-// isn't parseable JSON in a recognized shape (unknown format, or a plain
-// text blob). No similarity data available — every result is kept (matches
-// pre-adaptive-sizing behavior) subject only to MAX_FACTS/SNIPPET_LEN.
+// Last resort: regex-scan raw "content":"..." pairs when the response isn't
+// parseable JSON in a recognized shape (unknown format, or a plain text blob).
+// No similarity data available — every result is kept (matches pre-adaptive-sizing
+// behavior) subject only to MAX_FACTS/SNIPPET_LEN.
 function extractFactsLegacy(text) {
   if (!text) return [];
   const facts = [];
-  const re = /"(?:content|fact)"\s*:\s*("(?:[^"\\]|\\.)*")/g;
+  const re = /"content"\s*:\s*("(?:[^"\\]|\\.)*")/g;
   let m;
   while ((m = re.exec(text)) && facts.length < FETCH_K) {
     let s;
@@ -184,12 +181,10 @@ function budgetFill(results) {
 // budget-filled fact list. Never throws — an unparseable/empty response just
 // yields fewer or zero facts.
 async function searchFacts(cap, query, wing) {
-  // `k` and `detail` ('l0'/'l1'/'full') are widely-supported memory_search
-  // params across gateway memory servers — safe to send unconditionally.
-  // `fast` is not universally shipped server-side yet, so it stays env-gated
-  // behind USE_FAST below.
-  const args = { query, k: FETCH_K, detail: 'l1' };
-  if (wing) args.wing = wing;
+  // luca-memory v0.42 argument shape. Anything older rejects it and recall goes empty;
+  // /bifrost-debug section 8 names that symptom.
+  const args = { query, limit: FETCH_K, detail: 'l1' };
+  if (wing) args.filters = { wing };
   if (USE_FAST) args.fast = true;
   const text = await gw.callCapability(cap, 'memory_search', args, TIMEOUT_MS);
   const structured = parseStructured(text);
@@ -234,15 +229,8 @@ async function main() {
       mode: caps.memory.mode,
       facts: await searchFacts(caps.memory, query, null),
     };
-    // Corpus size, for the same reason as the skill count: it tells the model whether
-    // the shared memory is worth querying. memory_stats is cheap and widely present;
-    // absence just means the size line is omitted.
-    const stats = await gw.callCapability(caps.memory, 'memory_stats', {}, TIMEOUT_MS);
-    try {
-      const s = JSON.parse(stats);
-      const total = (s.hot_count || 0) + (s.cold_count || 0);
-      if (total > 0) out.memory.total = total;
-    } catch (_) { /* no stats tool, or a shape we don't read — size line omitted */ }
+    // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
+    // stays on memory_search alone. session-start renders without it.
 
     // No default wing name: KB recall is opt-in only, via an explicit
     // BIFROST_KB_WING configured for this gateway's KB scope.
@@ -314,4 +302,4 @@ if (require.main === module) {
   main().then(() => process.exit(0)).catch(() => process.exit(0));
 }
 
-module.exports = { parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious, MAX_CARRY_FORWARD_MS };
+module.exports = { parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious, MAX_CARRY_FORWARD_MS, searchFacts };

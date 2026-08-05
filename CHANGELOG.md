@@ -2,6 +2,50 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.7.0] — 2026-08-05
+
+**Breaking: requires luca-memory v0.42 or later.** v0.42 renamed and folded its tools
+with no compatibility aliases, and this release sends only that shape. Against an older
+memory server every memory call is rejected and session-start memory injection goes
+silently empty; skills and the rest of the gateway are unaffected. The version cannot be
+detected at runtime — the memory server sits upstream of the gateway and advertises no
+version string — so `/bifrost-debug` section 8 covers identifying an outdated server
+from its tool list (v0.42 exposes three memory tools, earlier versions fourteen), and
+notes that the gateway process needs a restart after the upgrade since it publishes the
+catalog it captured at start.
+
+### Fixed
+
+- **The background refresh spoke a schema v0.42 rejects.** `memory_search`'s `k` became
+  `limit` and its flat `wing` moved into a `filters` object. The refresh worker writes
+  no log, so the only symptom would have been memory injection quietly going empty.
+- **Search hits are scored from `relevance`**, renamed from `authority`. `budgetFill`
+  drops anything it cannot score, so this would have emptied the memory section rather
+  than merely misordering it.
+- **Provenance survives the field rename.** It was only ever appended to hits carrying
+  the pre-v0.42 `fact` field, which v0.42 renamed to `content`.
+
+### Changed
+
+- **The refresh no longer reports corpus size, and no longer calls `memory_call`.**
+  `memory_stats` is not a tool in v0.42, so the size would have had to come from
+  `memory_call(action="meta.stats")` — not worth making every session start depend on
+  the advanced `meta.*` namespace. The header degrades to "shared across the company".
+- **Memory guidance states the v0.42 contract only**, in the session-start context, the
+  `bifrost-gateway-essentials` skill, `/bifrost-candidates` and the memory
+  classification guidance: `limit` not `k`, `filters` for the exact-value narrowing, no
+  `valid_from` on store, `items=[...]` for batches, `content`/`relevance` in results.
+  `memory_call` is framed as the advanced surface rather than a third co-equal tool.
+- **`/bifrost-candidates` no longer describes a review step that exists.** v0.42 removed
+  collective mode and the candidate ledger, so a store writes directly. `stored` and
+  `queued` are now the only success replies; anything else, including the old
+  `{"status":"pending"}`, must be reported rather than counted as a submission.
+- **`bifrost-debug` section 8** replaces the collective-mode troubleshooting with the
+  version floor, the signals that a server predates it, and the upgrade path. The
+  warning against forwarding a caller-supplied `x-bifrost-vk-id` through
+  `allowed_extra_headers` stays: that mechanism forwards a header the caller already
+  sent, so allowlisting it would let any caller assert any identity.
+
 ## [1.6.0] — 2026-08-05
 
 ### Added

@@ -13,9 +13,10 @@ Promotion is publication. A fact promoted into the shared memory corpus is:
 3. **Effectively permanent.** The correction machinery exists and is entirely unused.
    The graph defines `SUPERSEDES`, `SUPERSEDES_MEMORY` and `CONTRADICTS` edge types and
    all three sit at zero; `memory_search` exposes `include_expired` over a `valid_to`
-   field, so every hit already reports whether it is expired; `memory_purge_noise` with
-   `dry_run=False` tombstones cards. (`memory_evolve` is not one of these — it returns
-   the neighbourhood for the caller to re-store, it does not delete.) None of it has
+   field, so every hit already reports whether it is expired;
+   `memory_call(action="evolve.purge_noise")` tombstones cards. (Inspecting a memory,
+   `meta.inspect`, is not one of these: it returns the neighbourhood for the caller to
+   re-store, it does not delete.) None of it has
    ever been used: the corpus has still never recorded a correction. An unexercised
    correction path is not a working one, so assume you cannot take it back.
 
@@ -252,11 +253,17 @@ Unverified at the time of writing. Each one changes how this page should read.
      exist in the graph and all three sit at zero. Test: does writing one actually
      change what a plain `memory_search` returns, or is it inert metadata that only a
      graph query can see?
-   - **`memory_purge_noise` with `dry_run=False`.** It tombstones cards. Test: is a
+   - **`memory_call(action="evolve.purge_noise")`.** It tombstones cards. Test: is a
      tombstoned card gone from recall, and is it gone from the provider's side or only
-     from this index?
-   - **`memory_evolve`.** Already answered, negatively: it returns the neighbourhood for
-     the caller to re-store. It is not a delete and should not be counted as one.
+     from this index? Preview it first with `meta.purge_noise_preview`.
+   - **`memory_call(action="evolve.edit")`.** It writes a correction, carries the
+     original's links over, then retires the original — so the id changes, since ids are
+     content-addressed. This is the first purpose-built correction path the corpus has
+     had. Test: does the correction actually become the hit a plain `memory_search`
+     returns, and is the original really gone from recall?
+   - **`memory_call(action="meta.inspect")`.** Already answered, negatively: it returns
+     the neighbourhood for the caller to re-store. It is not a delete and should not be
+     counted as one.
 
    Until someone runs those, "permanent" above is the safe reading and should stay — an
    unexercised correction path is not a working one.

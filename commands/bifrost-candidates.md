@@ -20,8 +20,10 @@ of them is the caller's own retrieval narrowing, chosen per query and dropped ju
 easily on the next one. Nothing a writer can set keeps an entry away from a reader. So
 anything written to the corpus is recalled by every colleague immediately, as settled
 team knowledge. Combined with correction machinery that exists but has never once been
-used, a wrong entry is effectively permanent. Shared submission is therefore deliberate,
-privacy-gated, and governed by the collective server workflow—not automatic retrieval.
+used, a wrong entry is effectively permanent. Shared submission is therefore deliberate
+and privacy-gated—never automatic retrieval. luca-memory v0.42 removed the collective
+review workflow that once staged submissions for a vote, so a store now lands in the
+corpus directly. Nothing downstream will catch a bad entry; this gate is the only one.
 
 ## Procedure
 
@@ -46,38 +48,38 @@ finding often gets recorded by more than one session.
 
 **4. Present your recommendation** as keep / drop / needs-editing, with one line of
 reasoning each. Any agent may submit an eligible team fact, but the server—not this
-local file—governs collective promotion. Do not submit content that fails the privacy
-gate or needs a human decision.
+local file—holds the shared corpus, so this spool is a staging area and never the
+record. Do not submit content that fails the privacy gate or needs a human decision.
 
 **5. Submit the eligible ones.** For each, first check the advertised schema, then
 call the memory server's `memory_store` (spelled as your SessionStart context shows it
-for this gateway). luca-memory v0.40 requires:
+for this gateway). On luca-memory v0.42:
 
 - `subject` — the entity the claim is about, such as a project, service, or convention.
-- `valid_from` — when the claim became valid in ISO 8601. Use an earlier known validity
-  time when the finding provides one; otherwise use the current time.
 - `text` — the finding rewritten as one clean, self-contained claim. Prefer this over
   pasting the raw bullet.
+- `body` — optional markdown for anything longer than a fact. Recall stays fast on the
+  short `text` and pulls the body up only when it is needed.
+- `items=[...]` — optional, to submit several findings in one call. One rejected item
+  does not discard the rest.
 
-`tenant` was removed. A stale Bifrost catalog may still advertise it, but it is an
-ignored compatibility input—never invent a tenant value or treat it as a privacy scope.
+Read the advertised schema rather than this list. Do not send `valid_from`: the server
+stamps its own UTC time, and one smuggled through is ignored, so there is nothing to
+invent. `tenant`, `role` and `vk` are schema errors rather than ignored inputs — a
+stale Bifrost catalog may still advertise them, but never invent a value or treat one
+as a privacy scope.
 
-In a correctly wired collective Bifrost deployment, the store returns
-`{"status":"pending","candidate_id":"..."}`. That is a durable server-side
-candidate with the submitting user's first vote, **not** a promoted or searchable fact.
-Keep the `candidate_id` with the local entry as a reference, but do not treat the local
-spool as the authoritative ledger. The v0.40 service does not yet expose the full
-cross-user resolution workflow, so flag any candidate that needs follow-up rather than
-claiming it was promoted.
+Read what the store returns rather than assuming it landed. `{"status":"stored"}` is an
+immediate write and `{"status":"queued"}` a queued-ingest acceptance; both mean the
+claim is in. `{"status":"skipped","reason":"noise"}` means the noise classifier dropped
+it — reread the text as if you had not written it, and only resend with `force=true`
+if it really is a durable fact rather than status or telemetry. Anything else, including
+a `{"status":"pending"}` reply, means the memory server is older than v0.42 and this
+plugin's calls are not landing: say so rather than reporting the submission as done.
 
-`{"status":"queued"}` is a local/private queued-ingest acceptance, and
-`{"status":"stored"}` is an immediate local/private write. If the Bifrost shared
-deployment returns either, stop and ask the gateway operator to verify collective mode
-and trusted VK-identity injection before treating it as company knowledge.
-
-**6. Prune only dropped or completed local entries.** Keep collective `pending` entries
-with their `candidate_id` until their server-side outcome is available. Do not mark a
-pending candidate as promoted merely because it was accepted by `memory_store`.
+**6. Prune only dropped or completed local entries.** Keep an entry in the spool until
+its store returned `stored` or `queued`. Do not mark one as promoted on the strength of
+any other reply.
 
 ## Notes
 

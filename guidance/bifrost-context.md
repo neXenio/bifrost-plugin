@@ -59,16 +59,34 @@ its live size. Use those exact invocations — they are discovered, not guessed.
 
 If they are absent, discovery has not run yet (first session here, or the gateway was
 unreachable). In that case: `skill_search(query="<task>", k=5)` then
-`get_skill(name=...)` to find and load a skill; `memory_search(query="...", k=6)`
-before non-trivial work. Before storing, check the advertised `memory_store` schema.
-For luca-memory v0.40, provide `subject`, ISO 8601 `valid_from`, and `text` (or `body`)
-— application `tenant` was removed; a stale catalog may still show it, but it is only a
-temporary ignored compatibility input and must not be invented. In a collective Bifrost
-deployment, a successful store returns `{"status":"pending","candidate_id":"..."}`:
-the claim is staged for collective review, not yet shared knowledge. Local/private mode
-can instead return `queued` or `stored`. Store only privacy-safe, durable facts after
-significant work. Use `listToolFiles()` to see what else the gateway exposes, and
-confirm server names there rather than guessing.
+`get_skill(name=...)` to find and load a skill; `memory_search(query="...", limit=6)`
+before non-trivial work.
+
+**Read the advertised schema rather than trusting this paragraph.** The memory
+contract below is luca-memory v0.42.
+
+- `memory_search(query, limit, scope, tier, filters, detail)`. `scope` is `search`
+  (rank by meaning), `graph` (follow connections outward) or `session` (what is hottest
+  right now, no query needed); `tier` is `hot`, `cold` or `all`. `filters` is an object
+  narrowing by exact value on `subject`/`wing`/`room`/`agent_id`/`conversation_id`.
+  Hits carry `content` and `relevance`.
+- `memory_store(subject, text)`, with `body` for anything longer than a fact and
+  `items=[...]` to store several at once. Do not send `valid_from` — the server stamps
+  its own UTC time. `tenant`, `role` and `vk` are schema errors; a stale gateway
+  catalog may still list them, but they must not be invented.
+Those two are the whole of normal use: search before the work, store after it. You
+should not need anything else.
+
+The advanced surface, when you genuinely do, is `memory_call(action=..., request=...)`:
+corpus statistics, a memory's markdown body (`meta.get_full`), corrections, linking,
+pruning. Actions are namespaced and the prefix is the contract — `evolve.*` changes the
+corpus, `meta.*` only reads it — and a bare name like `"stats"` is an error rather than
+an alias. Reach for it deliberately, not as part of a normal recall-then-store loop.
+
+A store returns `stored` or `queued`; `{"status":"skipped","reason":"noise"}` means the
+noise classifier dropped it, and `force=true` resends a fact it dropped wrongly. Store
+only privacy-safe, durable facts after significant work. Use `listToolFiles()` to see
+what else the gateway exposes, and confirm server names there rather than guessing.
 
 ## Onboarding / troubleshooting
 

@@ -379,7 +379,7 @@ function emitMemory(cache, cfg, use) {
       '**once you understand the task**, not before — a query built from the real problem',
       'beats one built from the directory name.',
       '',
-      `- **Recall**: \`${call('memory_search')}\` with \`query="<the specific thing>"\`, \`k=6\`.`,
+      `- **Recall**: \`${call('memory_search')}\` with \`query="<the specific thing>"\`, \`limit=6\`.`,
       `- **Store**: \`${call('memory_store')}\` after significant work — decisions made, root`,
       '  causes found, conventions and gotchas learned. This is how the next person\'s agent',
       '  (and yours, next week) gets it for free. Skip transient detail, secrets, per-file noise.',

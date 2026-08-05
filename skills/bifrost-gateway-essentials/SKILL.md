@@ -43,20 +43,28 @@ for signatures. Confirm server names from that listing rather than guessing them
 - `skill_search(query="<the task>", k=5)`, then `get_skill(name=...)` to load a
   match. The gateway's skill library is the point of the gateway; searching it is
   cheap and skipping it is how work gets redone.
-- `memory_search(query="...", k=6)` for prior decisions and constraints.
+- `memory_search(query="...", limit=6)` for prior decisions and constraints.
 
 ## After significant work
 
-Store durable, privacy-safe facts only. Check the advertised `memory_store` schema
-before calling it — for luca-memory v0.40 that means `subject`, an ISO 8601
-`valid_from`, and `text` (or `body`). The `tenant` argument was removed; a stale
-tool catalog may still list it, but it is an ignored compatibility input and must
-not be invented.
+Store durable, privacy-safe facts only: `memory_store(subject="...", text="...")`,
+with anything longer than a fact in `body` as markdown, and `items=[...]` to save
+several at once.
 
-Read the return value rather than assuming success. In a collective deployment a
-successful store returns `{"status":"pending","candidate_id":"..."}` — the claim is
-staged for review, not yet shared knowledge. Local or private mode returns `queued`
-or `stored` instead.
+Check the advertised schema before calling rather than trusting this page. The contract
+here is luca-memory v0.42: do not send `valid_from` (the server stamps its own UTC
+time), and `tenant`/`role`/`vk` are schema errors rather than ignored inputs.
+
+`memory_search` and `memory_store` are the whole of normal use. Everything else —
+statistics, reading a memory's markdown body, corrections, linking, pruning — sits
+behind `memory_call(action=...)`, namespaced so the prefix is the contract: `evolve.*`
+changes the corpus, `meta.*` only reads it. That is the advanced surface; reach for it
+deliberately rather than as part of a recall-then-store loop. A graph walk needs no such
+call: it is `memory_search(scope="graph")`.
+
+Read the return value rather than assuming success. Expect `stored` or `queued`, and
+`{"status":"skipped","reason":"noise"}` when the noise classifier drops the write —
+resend a wrongly-dropped fact with `force=true`.
 
 ## When something looks broken
 
