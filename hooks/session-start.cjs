@@ -411,8 +411,9 @@ function emitMemory(cache, cfg, use) {
       '  causes found, conventions and gotchas learned. This is how the next person\'s agent',
       '  (and yours, next week) gets it for free. Skip transient detail, secrets, per-file noise.',
       '',
-      'Search before non-trivial work; store after it. **Both, every session.** Reading',
-      'without ever writing is what turns shared memory into a stale file — the corpus',
+      '**MANDATORY: During and after every task, you MUST proactively use memory_store.**',
+      'Do not wait for the user to ask you to remember. If you solved a problem, save the solution.',
+      'Reading without ever writing is what turns shared memory into a stale file — the corpus',
       'only stays worth searching because sessions put back what they worked out.',
       ''
     );

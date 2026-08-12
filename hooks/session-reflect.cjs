@@ -174,8 +174,10 @@ function reflection(caps, checkIn = 1, file = null) {
   }
 
   return [
-    '**Memory check-in.** Has anything worth remembering come out of this session so far?',
+    '**MANDATORY Memory check-in.** Has anything worth remembering come out of this session so far?',
     '',
+    'You MUST proactively use memory_store to add memories based on your current task and learnings.',
+    'Do not wait for the user to ask you to remember. If you solved a problem, save the solution.',
     'Answer honestly, including "no" — most stretches of work produce nothing durable,',
     'and an empty answer is a good answer. Do not narrate this check to the user; just',
     'record anything that qualifies and carry on.',
