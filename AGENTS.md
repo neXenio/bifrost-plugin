@@ -43,16 +43,19 @@ the agent.
 `mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
 past decisions, project facts, or context (e.g. `k=5`).
 
-**Capture Learnings (MANDATORY):** During and after every task, you MUST proactively use the gateway's memory store tool (typically `mcp__bifrost__<memory-server>-store`) to add memories based on your current task and learnings. Do not wait for the user to ask you to remember.
-Include: architectural decisions made, root causes of bugs found, project conventions learned, and gotchas discovered.
-Exclude: transient details, secrets, per-file noise.
+**After completing significant work:** save durable facts or decisions with the
+gateway's memory store tool (typically `mcp__bifrost__<memory-server>-store`).
+Include: architectural decisions made, root causes of bugs found, project
+conventions learned, gotchas discovered. Exclude: transient details, secrets,
+per-file noise. Most stretches of work produce nothing durable, and storing
+nothing is the right outcome then — a corpus padded with restatements of the
+task is worse than a smaller one.
 
-**Evolve the memory:** If you find outdated, incomplete, or incorrect information
-during your search, do NOT ignore it. You MUST evolve the memory using the
-`memory_call` tool with actions like `evolve.edit` (to correct facts),
-`evolve.invalidate` (to retire outdated facts), or `evolve.link` (to relate
-facts). The memory system degrades if agents only append; it is your
-responsibility to curate and evolve the existing graph.
+**If a search turns up something wrong:** correcting it is worth more than adding
+to it. Where the gateway exposes them, `memory_call` actions such as
+`evolve.edit` (correct a fact), `evolve.invalidate` (retire an outdated one) and
+`evolve.link` (relate two) are how that happens. A store that only ever appends
+accumulates contradictions no reader can resolve.
 
 Run `/mcp` to confirm which memory tools your gateway exposes and their exact
 tool names.

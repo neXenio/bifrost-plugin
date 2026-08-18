@@ -163,6 +163,15 @@ function reflection(caps, checkIn = 1, file = null) {
 
   const spool = file || candidateFile();
 
+  // This prompt asks; it does not command. A "MANDATORY … you MUST proactively use
+  // memory_store" opener was added here once and had to come back out: the same
+  // message ends by explaining that the destination is a LOCAL file and explicitly not
+  // memory_store, so it instructed the agent to do the one thing the rest of the
+  // message, and this module's entire header comment, exist to prevent. Beyond the
+  // contradiction, a mandate is the wrong shape for the job — only the agent knows
+  // whether anything was learned, and the honest answer is usually "nothing", which a
+  // MUST cannot accommodate without producing filler.
+  //
   // Later check-ins taper, for the same reason the per-prompt nudge does: the criteria
   // list is ~500 tokens and byte-identical every time, so repeating it five times in a
   // long session costs more than the entire SessionStart block and adds nothing after
@@ -174,10 +183,8 @@ function reflection(caps, checkIn = 1, file = null) {
   }
 
   return [
-    '**MANDATORY Memory check-in.** Has anything worth remembering come out of this session so far?',
+    '**Memory check-in.** Has anything worth remembering come out of this session so far?',
     '',
-    'You MUST proactively use memory_store to add memories based on your current task and learnings.',
-    'Do not wait for the user to ask you to remember. If you solved a problem, save the solution.',
     'Answer honestly, including "no" — most stretches of work produce nothing durable,',
     'and an empty answer is a good answer. Do not narrate this check to the user; just',
     'record anything that qualifies and carry on.',
