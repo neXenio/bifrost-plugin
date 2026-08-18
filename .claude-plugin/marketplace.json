@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "bifrost-marketplace",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Marketplace for the Bifrost MCP gateway plugin for Claude Code.",
   "owner": {
     "name": "neXenio GmbH",

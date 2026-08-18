@@ -267,3 +267,27 @@ Fix, either one:
 Note the hooks are **unaffected** either way — they read the credential from
 `~/.claude.json` directly, so skills, memory and the tool roster keep working even
 while the MCP tools are missing. That asymmetry is what makes this confusing.
+
+## Which version is actually running
+
+Do not answer this from `~/.claude/plugins/installed_plugins.json`. That file records
+the version and `installPath` captured at install time, and it does not track a
+marketplace whose source is a local directory. On a machine where the marketplace
+points at a working tree, the recorded entry can be several minor versions behind what
+is executing, with a stale copy still sitting at the recorded path.
+
+Check what is on disk, not what was recorded:
+
+```
+ls -la ~/.claude/plugins/cache/<marketplace>/bifrost-plugin/
+```
+
+A symlink among those version directories is the tell — it points at a working tree,
+and that tree is what loads. Confirm by feature rather than by version string: if
+`hooks/hooks.json` at the recorded `installPath` has no `Stop` or `PostToolUse` entry
+but sessions do get memory check-ins and `~/.cache/bifrost-plugin/usage.json` is being
+written, the recorded path is not the code in play.
+
+This matters for a bug report: a plugin developer dogfooding through a directory-source
+marketplace is testing uncommitted code while every diagnostic reports a released
+version number.
