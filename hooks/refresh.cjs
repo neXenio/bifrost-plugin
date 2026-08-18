@@ -83,8 +83,10 @@ const DEFAULT_WARN_THRESHOLDS = {
   stale_memories: 50,
   unprocessed_staged: 10,
 };
-// Fallback bound for a warning type luca-memory grows later that has no tuned
-// default here yet. Better to over-report an unknown type once than to swallow it.
+// Bound for a warning type luca-memory grows later that has no tuned default here
+// yet. 1 means a new type surfaces as soon as it has anything to report, which is the
+// right default for a backlog counter — but it must still HAVE a count; see
+// actionableWarnings.
 const DEFAULT_WARN_THRESHOLD = 1;
 // How long facts may be carried forward across empty refreshes before we stop
 // injecting them. Bounds retention when a gateway stays broken.
@@ -214,13 +216,26 @@ function warnThreshold(type) {
 }
 
 // Threshold gate: a count-bearing warning clears its own type's bar or stays silent.
-// Every type luca-memory emits today carries a count; a hypothetical future type
-// without one has nothing to compare against, so it is kept rather than silently
-// dropped — a bad reason to show something beats no reason to hide it.
+//
+// This used to keep count-less warnings unconditionally ("better to over-report an
+// unknown type once than to swallow it"). That reasoning held only while the rendered
+// line was the server's `message`, which at least said something. session-start now
+// renders `<count> <type>` and deliberately never the server's prose (see warningText
+// there for why), so a warning with no count has nothing left to say — and, being
+// exempt from every threshold, it said it on every single session start. The live
+// gateway's `evolution_duty` was exactly that: no count, so unthresholded, and its
+// whole payload was the `message` we no longer print.
+//
+// So the contract is now: a maintenance warning is a TYPE plus a COUNT that clears
+// that type's bar. Anything else is not a backlog signal we can render honestly.
+//
+// `message` is dropped here rather than at render time so server-controlled prose is
+// never written to the cache at all — one less place for it to be picked up later.
 function actionableWarnings(warnings) {
-  return warnings.filter(
-    (w) => typeof w.count !== 'number' || w.count >= warnThreshold(w.type)
-  );
+  return warnings
+    .filter((w) => typeof w.type === 'string' && w.type.trim())
+    .filter((w) => typeof w.count === 'number' && w.count >= warnThreshold(w.type))
+    .map((w) => ({ type: w.type, count: w.count }));
 }
 
 // Last resort: regex-scan raw "content":"..." pairs when the response isn't

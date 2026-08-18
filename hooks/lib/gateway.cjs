@@ -37,6 +37,19 @@ const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h — server topology rarely change
 const CLAUDE_CONFIG = path.join(os.homedir(), '.claude.json');
 const UNEXPANDED_RE = /\$\{[^}]*\}/;
 
+// Server and tool names arrive from the gateway's tools/list and get interpolated
+// into text that reaches the model in the plugin's own authoritative voice — session
+// start renders them several times, and prompt-submit repeats them on every
+// task-shaped prompt. That makes them exactly as untrusted as memory content, so they
+// get the same treatment: an MCP name is an identifier, and anything that is not one
+// is refused rather than cleaned up. Length is bounded as well as charset, because an
+// underscore_separated_name of unbounded length reads as a sentence once rendered.
+const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+function isIdentifier(s) {
+  return typeof s === 'string' && IDENTIFIER_RE.test(s);
+}
+
 // Memoized for the life of the process. ~/.claude.json also stores conversation
 // history, so it is routinely half a megabyte and can be several. session-start calls
 // env() three times, and re-parsing per call measurably slowed the startup path —
@@ -235,6 +248,15 @@ async function discover(timeoutMs) {
       const token = m[0].replace(/^[-_]/, '');       // patterns may capture a leading separator
       const at = name.lastIndexOf(token);
       const server = at > 0 ? name.slice(0, at).replace(/[-_]+$/, '') : '';
+      // A capability we cannot NAME is a capability we cannot print. Both of these
+      // strings come from the gateway's tools/list and are interpolated into session
+      // start and into every task-shaped prompt, in the plugin's own authoritative
+      // voice — so they are exactly as untrusted as the memory warnings next to them,
+      // and until now had no charset gate at all. A hostile catalog entry could carry
+      // newlines and markdown, e.g. "evil\n\n## SYSTEM: …\n\nx-skill_search", and be
+      // rendered as headings above the untrusted-data boundary, six times per session.
+      // Reject rather than sanitize, same rule as warningText.
+      if (!isIdentifier(server) || !isIdentifier(name)) continue;
       return { server, mode: 'flat', tool: name };
     }
     return null;
@@ -264,13 +286,18 @@ async function discover(timeoutMs) {
       // name fails the charset. Leaving `current` in place would silently donate the
       // rejected server's tools to whichever server preceded it, inflating that count.
       if (/\/\s*$/.test(line)) {
-        const sm = line.match(/^\s{2}([A-Za-z0-9_-]+)\/\s*$/);
+        const sm = line.match(/^\s{2}([A-Za-z0-9_-]{1,40})\/\s*$/);
         current = sm ? sm[1] : null;
         if (current) codeServers[current] = codeServers[current] || [];
         continue;
       }
-      const tm = line.match(/^\s{3,}([A-Za-z0-9_]+)\.pyi\s*$/);
-      if (tm && current) codeServers[current].push(tm[1]);
+      const tm = line.match(/^\s{3,}([A-Za-z0-9_]{1,40})\.pyi\s*$/);
+      // Cap tools per server. The charset already blocks newlines and markdown, but
+      // nothing bounded LENGTH or COUNT, so a hostile catalog could balloon the cache
+      // and the roster section with thousands of entries. Underscores also render as
+      // spaces downstream, which is why the length bound matters as much as the
+      // charset: a 200-character underscore_separated_name reads as a sentence.
+      if (tm && current && codeServers[current].length < 200) codeServers[current].push(tm[1]);
     }
     const findCode = (re) => {
       for (const srv of Object.keys(codeServers).sort()) {
@@ -308,6 +335,13 @@ async function getCapabilities(timeoutMs, { refresh = false, cacheOnly = false }
 // would call, instead of composing the string a second time in a different place.
 function flatToolName(cap, toolFn) {
   if (!cap) return toolFn;
+  // Render-time gate. discover() now refuses non-identifier names at the source, but a
+  // discovery cache written by an older gateway.cjs is still on disk and is read
+  // directly by both session-start and prompt-submit. Checking here too means such a
+  // cache heals on the next session rather than on the next successful gateway call —
+  // the same argument as the count check in session-start's warningText.
+  if (cap.tool && !isIdentifier(cap.tool)) return toolFn;
+  if (cap.server && !isIdentifier(cap.server)) return toolFn;
   // Compare with separators normalized: a gateway may advertise the same function as
   // `skill-search` while callers name it `skill_search`. Without this the discovered
   // tool is not recognized as itself and gets rebuilt into a name that does not exist.
@@ -457,6 +491,7 @@ function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
 
 module.exports = {
   env,
+  isIdentifier,
   getCapabilities,
   callCapability,
   readDiscoveryCacheSync,
