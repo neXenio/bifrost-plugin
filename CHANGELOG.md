@@ -2,7 +2,12 @@
 
 All notable changes to bifrost-plugin are documented here.
 
-## [1.7.1] — 2026-08-19
+## [1.7.2] — 2026-08-19
+
+Supersedes 1.7.1, which was tagged while `plugin.json` and `marketplace.json`
+still declared 1.7.0 and was never published as a release. Nothing consumed that
+tag: marketplace installs follow the default branch. The changes below were
+written for 1.7.1 and ship here.
 
 **Security: the gateway can no longer speak in the plugin's own voice.** Session start
 prints straight into the model's context, and everything above the

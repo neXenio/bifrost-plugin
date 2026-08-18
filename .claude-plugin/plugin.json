@@ -1,6 +1,6 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skill discovery, agent-driven memory, one-command onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
   "author": {
     "name": "neXenio GmbH",
