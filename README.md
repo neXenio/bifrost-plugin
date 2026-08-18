@@ -21,6 +21,23 @@ degrades gracefully — those features simply no-op.
 | 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node bin/install.js --key vk_…` (or `/bifrost-setup`) |
 | 4 — Agent-driven memory | Recalls context via gateway memory tools before non-trivial tasks and saves durable decisions after work |
 
+### The hooks, concretely
+
+Five hook events are registered in [`hooks/hooks.json`](./hooks/hooks.json), run by
+four scripts — `PostToolUse` and `PostToolUseFailure` share one. All of them fail
+silently and always exit 0, so a broken gateway can never block a session.
+
+| Event | Script | What it does |
+|-------|--------|--------------|
+| `SessionStart` | `session-start.cjs` | Emits the gateway primer, skill library, MCP tool roster and recalled memory, all from a local cache (no blocking network). Spawns the detached refresh worker afterwards. |
+| `UserPromptSubmit` | `prompt-submit.cjs` | On a prompt containing a task verb, adds one line pointing at the skill library. Full form once per session, then tapered. |
+| `Stop` (async) | `session-reflect.cjs` | Every few turns, asks whether anything was learned worth appending to the project's `.bifrost/candidates.md`. Never writes memory itself. |
+| `PostToolUse` / `PostToolUseFailure` (async) | `usage.cjs` | Counts, per session, which capability classes were used and whether calls succeeded. Counts only — never queries, arguments or results, and nothing leaves the machine. `SessionStart` reads it back to decide how hard to push. |
+
+Cached context is emitted for up to 14 days and labelled with its age once past 24
+hours, rather than withheld — the session that has been away longest is the one that
+needs the primer most. A background refresh runs at most hourly.
+
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
 
 ---
