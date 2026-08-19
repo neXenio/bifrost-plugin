@@ -2,6 +2,41 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.7.3] — 2026-08-19
+
+**Weak recall is no longer injected, and the section may now be empty.** Measured
+across 63 local project caches: 251 of 378 injected facts scored below 0.55, the
+per-project best hit had a median of 0.563, and on this repo all six facts labelled
+"recalled for this project" were about unrelated work. The relevance floor had been
+removed in an earlier release because this gateway's scores sat below the old 0.45
+default and the section rendered empty — read at the time as "the floor is wrong".
+The data says the opposite: recall is weak, and removing the floor only hid it.
+
+The default floor is now 0.55, joined by a scale-free relative floor that keeps a
+result only if it scores at least 90% of the best hit in the same response. Both were
+needed: the projects with the worst recall had facts clustered *uniformly* low, so a
+ratio test alone passes all of them. `BIFROST_MEMORY_MIN_SIM` and
+`BIFROST_MEMORY_RELATIVE_FLOOR` are configurable, and setting both to 0 restores the
+previous behaviour.
+
+Expect fewer facts, and on some projects none at all — at this floor, 28 of the 63
+caches measured inject nothing. That is the intended outcome rather than a
+regression: those projects have nothing relevant stored, the section degrades to
+empty, and the agent is still told to search once it understands the task. An honest
+empty section beats six confident-looking irrelevant facts.
+
+**SessionStart no longer fires on resume.** The hook had no matcher, so it re-injected
+the full header on every session-start source: 117 redundant injections across 2,526
+local transcripts. It is now scoped to `startup|clear|compact`.
+
+**The skill-library section is a pointer, not an essay.** It spent roughly 1.5KB every
+session re-arguing why searching is worthwhile, which either landed on first read or
+never would. The two largest skill plugins in the ecosystem both inject a single
+pointer and let the model pull detail on demand.
+
+Together these take the session-start injection from about 3,078 tokens to about
+2,831, and to roughly 2,100 on a project whose weak facts are now filtered out.
+
 ## [1.7.2] — 2026-08-19
 
 Supersedes 1.7.1, which was tagged while `plugin.json` and `marketplace.json`
