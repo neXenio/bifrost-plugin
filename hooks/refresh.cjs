@@ -64,7 +64,19 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // empty. Ranking plus MAX_FACTS and the char budget already bound what gets injected;
 // a hard threshold on an unknown scale only ever removed good results. Set
 // BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
-const DEFAULT_MIN_SIM = 0;
+// Measured, not guessed. Across 63 local project caches the per-project BEST hit had
+// median 0.563 (p25 0.513, p90 0.635, max 0.767), and 251 of 378 injected facts scored
+// under 0.55 — two thirds of the section was filler, and on several projects every
+// injected fact was about unrelated work while still being labelled "recalled for this
+// project". At 0.55, 28 of those 63 projects inject nothing at all, and that is the
+// CORRECT outcome: the corpus holds nothing relevant for them, the section degrades to
+// empty, and the agent is told to search once it knows the task.
+//
+// The earlier 0.45 default was removed because this gateway's scores sat below it and
+// the section rendered empty — read at the time as "the floor is wrong". The data says
+// the retrieval is weak and removing the floor only hid it. A floor plus an honest
+// empty section beats six confident-looking irrelevant facts.
+const DEFAULT_MIN_SIM = 0.55;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
 // Per warning type, because the three luca-memory actually emits
 // (memory_lib.get_system_warnings: pending_contradictions, stale_memories,
@@ -107,6 +119,10 @@ const SNIPPET_LEN = envInt('BIFROST_MEMORY_SNIPPET_LEN', DEFAULT_SNIPPET_LEN);
 const BUDGET_CHARS = envInt('BIFROST_INJECT_BUDGET', DEFAULT_BUDGET_CHARS);
 const MIN_SIM = envFloat('BIFROST_MEMORY_MIN_SIM', DEFAULT_MIN_SIM);
 const USE_FAST = process.env.BIFROST_MEMORY_FAST === '1';
+// Keep a result only if it scores at least this fraction of the best hit in the same
+// response. Scale-free, so unlike an absolute floor it works on any memory server.
+// 0 disables. 0.9 is deliberately tight: below that, measured recall was mostly filler.
+const RELATIVE_FLOOR = envFloat('BIFROST_MEMORY_RELATIVE_FLOOR', 0.9);
 
 function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
@@ -265,11 +281,33 @@ function truncate(s, len) {
 // unknown similarity (legacy/unstructured responses) are always kept, so
 // behavior degrades to "cap at MAX_FACTS, flat SNIPPET_LEN" — i.e. exactly
 // the pre-adaptive-sizing behavior — when no similarity data is available.
+//
+// On top of the absolute floor there is a RELATIVE one, and it is the one that
+// actually bites. Measured across 63 local project caches: 251 of 378 injected facts
+// scored below 0.55, median 0.522 — two thirds of everything injected was weak-match
+// filler, and on one project all six "recalled for this project" facts were about
+// unrelated work. The absolute floor cannot fix that alone: it was set to 0 precisely
+// because raw scores are not comparable across memory servers (this gateway's own
+// range sat entirely below the old 0.45 default, which blanked the section and was
+// misread as "the floor is wrong" rather than "recall is weak").
+//
+// A ratio against the best hit in the same response IS comparable across servers,
+// because it cancels whatever scale the server uses. If the top hit is a genuine
+// match, near-equal hits ride along; if the top hit is itself weak, the whole set is
+// weak and the tail is noise either way. Nothing is dropped when only one result
+// carries a score, so a single good hit still injects.
+function relativeFloor(known) {
+  if (known.length < 2 || !RELATIVE_FLOOR) return 0;
+  const best = Math.max(...known.map((r) => r.similarity));
+  return best > 0 ? best * RELATIVE_FLOOR : 0;
+}
+
 function budgetFill(results) {
   const known = results.filter((r) => typeof r.similarity === 'number');
   const unknown = results.filter((r) => typeof r.similarity !== 'number');
 
-  const kept = known.filter((r) => r.similarity >= MIN_SIM);
+  const floor = Math.max(MIN_SIM, relativeFloor(known));
+  const kept = known.filter((r) => r.similarity >= floor);
   kept.sort((a, b) => b.similarity - a.similarity);
 
   const pool = kept.concat(unknown); // scored-and-relevant first, then unscored

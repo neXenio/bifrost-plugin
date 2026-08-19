@@ -267,30 +267,20 @@ function emitSkills(cache, cfg, use) {
       ''
     );
   }
+  // Progressive disclosure: say what exists and how to reach it, then stop. The long form
+  // spent ~1.5KB every session re-arguing WHY to search — an argument that either
+  // landed the first time or was not going to. The two largest skill plugins in the
+  // ecosystem (obra/superpowers, n8n-io/skills) both inject a single pointer and let
+  // the model pull detail on demand, which is the same instinct the per-prompt nudge
+  // already follows by tapering after its first firing.
   lines.push(
-    'Assume a relevant skill already exists. Searching costs one tool',
-    'call; reinventing the procedure costs far more and loses the team knowledge baked',
-    'into the skill. **Search whenever a request is more than a trivial edit** — before',
-    'implementing, debugging, deploying, reviewing, testing, or setting up infra, and',
-    'any time you are about to write a multi-step procedure from scratch.',
+    'Assume a relevant skill already exists; searching costs one call. The library is',
+    'large and unevenly curated, so judge what comes back — a weak match is not better',
+    'than your own approach.',
     '',
-    '**Check this library first**, before using your own skills or improvising — it may',
-    'already hold a procedure for the task, more current than a general approach. Then',
-    'judge what comes back: the library is large and unevenly curated, so a weak or',
-    'stale match is not better than your own approach. Say so and proceed rather than',
-    'forcing a poor fit.',
-    '',
-    `- **1. Search**: \`${call('skill_search')}\` with \`query="<the task, in your own words>"\`, \`k=5\`.`,
-    `- **2. Browse if search misses**: \`${call('skill_navigate')}\` (omit \`node\` for the root); the tree is deep with auto-generated labels, so try search first.`,
-    `- **3. Load**: \`${call('get_skill')}\` with \`name="<skill>"\` — always load before following a skill.`,
-    '',
-    'Search with the task phrased naturally — it matches on intent, not keywords:',
-    '',
-    '  query="fix a failing test in a node project"',
-    '  query="review a merge request for security issues"',
-    '  query="set up monitoring and alerts for a new service"',
-    '',
-    'A search that returns nothing useful is cheap. Skipping the search is what costs.',
+    `- **Search**: \`${call('skill_search')}\` with \`query="<the task, in your own words>"\`, \`k=5\`.`,
+    `- **Browse if search misses**: \`${call('skill_navigate')}\`.`,
+    `- **Load before following**: \`${call('get_skill')}\` with \`name="<skill>"\`.`,
     ''
   );
   process.stdout.write(lines.join('\n'));
