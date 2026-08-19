@@ -205,19 +205,82 @@ test('unexpanded ${VAR} placeholders are not treated as credentials', () => {
 });
 
 // --- Group 3: relevance threshold -------------------------------------------------
-// The old default floor (0.45) sat entirely above this gateway's measured score range
-// (0.381-0.415), so every scored fact was dropped and the memory section rendered
-// empty on every session. Scores are not comparable across servers, so there is no
-// safe non-zero default.
+// This group's rule REVERSED, on measured evidence, and the history matters.
+//
+// Originally the floor was 0.45, it sat above this gateway's then-measured range
+// (0.381-0.415), every scored fact was dropped, and the section rendered empty. That
+// was read as "the floor is wrong" and the default went to 0, which is what the test
+// below used to pin. Later measurement across 63 real project caches showed the other
+// half of the story: 251 of 378 injected facts scored under 0.55, per-project best-hit
+// median was 0.563, and on several projects every "recalled for this project" fact was
+// about unrelated work. The floor was not the bug; weak recall was, and removing the
+// floor only hid it.
+//
+// So the contract is now: an honest empty section beats confident irrelevant facts.
 
-test('facts scoring in the live-measured range are kept, not dropped', () => {
-  const live = [
-    { content: 'fact A', similarity: 0.415 },
-    { content: 'fact B', similarity: 0.400 },
-    { content: 'fact C', similarity: 0.381 },
+test('SessionStart is scoped so a resume does not re-inject the whole header', () => {
+  // Without a matcher the hook fires on every SessionStart source, including `resume`,
+  // re-injecting ~3k tokens the model already has. Measured across local transcripts:
+  // 117 redundant injections over 2,526 transcripts before this was scoped.
+  const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const entry = hooks.SessionStart[0];
+  assert.strictEqual(entry.matcher, 'startup|clear|compact',
+    'SessionStart must not fire on resume');
+});
+
+test('a set of uniformly weak facts is dropped rather than injected', () => {
+  // The exact shape measured on this repo's own cache: six facts, none relevant, all
+  // clustered just under 0.52. A relative-only floor cannot catch this — they are all
+  // within 90% of each other — which is why an absolute floor is still required.
+  const weak = [
+    { content: 'unrelated pptx edit', similarity: 0.516 },
+    { content: 'unrelated summary', similarity: 0.492 },
+    { content: 'unrelated money-out work', similarity: 0.490 },
   ];
-  const kept = budgetFill(live);
-  assert.strictEqual(kept.length, 3, 'default floor must not discard mid-range scores');
+  assert.deepStrictEqual(budgetFill(weak), [],
+    'weak filler must not be presented as recalled context');
+});
+
+test('a genuine match is kept, and its weak tail is not', () => {
+  const kept = budgetFill([
+    { content: 'real match', similarity: 0.72 },
+    { content: 'also relevant', similarity: 0.66 },
+    { content: 'filler', similarity: 0.48 },
+  ]);
+  assert.strictEqual(kept.length, 2);
+  assert.strictEqual(kept[0].content, 'real match');
+});
+
+test('the relative floor drops a tail far below the best hit', () => {
+  // Scale-free, so it works on a server whose scores run high across the board.
+  const kept = budgetFill([
+    { content: 'top', similarity: 0.95 },
+    { content: 'near', similarity: 0.92 },
+    { content: 'far below the best hit', similarity: 0.60 },
+  ]);
+  assert.deepStrictEqual(kept.map((k) => k.content), ['top', 'near']);
+});
+
+test('both floors are configurable, and zero disables them', () => {
+  const prevMin = process.env.BIFROST_MEMORY_MIN_SIM;
+  const prevRel = process.env.BIFROST_MEMORY_RELATIVE_FLOOR;
+  process.env.BIFROST_MEMORY_MIN_SIM = '0';
+  process.env.BIFROST_MEMORY_RELATIVE_FLOOR = '0';
+  try {
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+    const fresh = require('../hooks/refresh.cjs');
+    const kept = fresh.budgetFill([
+      { content: 'a', similarity: 0.415 },
+      { content: 'b', similarity: 0.381 },
+    ]);
+    assert.strictEqual(kept.length, 2, 'an operator can restore the old behaviour');
+  } finally {
+    if (prevMin === undefined) delete process.env.BIFROST_MEMORY_MIN_SIM;
+    else process.env.BIFROST_MEMORY_MIN_SIM = prevMin;
+    if (prevRel === undefined) delete process.env.BIFROST_MEMORY_RELATIVE_FLOOR;
+    else process.env.BIFROST_MEMORY_RELATIVE_FLOOR = prevRel;
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+  }
 });
 
 test('higher-scored facts rank first', () => {
