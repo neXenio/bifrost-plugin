@@ -261,6 +261,21 @@ test('the relative floor drops a tail far below the best hit', () => {
   assert.deepStrictEqual(kept.map((k) => k.content), ['top', 'near']);
 });
 
+// Load a fresh refresh.cjs under env overrides (the floors are read at module load).
+function withRefreshEnv(env, fn) {
+  const prev = {};
+  for (const k of Object.keys(env)) { prev[k] = process.env[k]; process.env[k] = env[k]; }
+  try {
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+    return fn(require('../hooks/refresh.cjs'));
+  } finally {
+    for (const k of Object.keys(env)) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+  }
+}
+
 test('both floors are configurable, and zero disables them', () => {
   const prevMin = process.env.BIFROST_MEMORY_MIN_SIM;
   const prevRel = process.env.BIFROST_MEMORY_RELATIVE_FLOOR;
@@ -291,12 +306,24 @@ test('higher-scored facts rank first', () => {
   assert.strictEqual(kept[0].content, 'high');
 });
 
-test('unscored facts (legacy response shape) are still kept', () => {
-  const kept = budgetFill([
+test('unscored facts are dropped while a floor is active, kept when both floors are off', () => {
+  const unscored = [
     { content: 'a', similarity: null },
     { content: 'b', similarity: null },
-  ]);
-  assert.strictEqual(kept.length, 2);
+  ];
+  assert.deepStrictEqual(budgetFill(unscored), [], 'default floors are active');
+  // Scored rows still come through; the unscored ones no longer ride along behind them.
+  assert.deepStrictEqual(
+    budgetFill([{ content: 'hit', similarity: 0.9 }, ...unscored]).map((k) => k.content),
+    ['hit']);
+  for (const [min, rel] of [['0.3', '0'], ['0', '0.9']]) {
+    const keep = withRefreshEnv({ BIFROST_MEMORY_MIN_SIM: min, BIFROST_MEMORY_RELATIVE_FLOOR: rel },
+      (fresh) => fresh.budgetFill(unscored).length);
+    assert.strictEqual(keep, 0, `MIN_SIM=${min} RELATIVE_FLOOR=${rel} is still a floor`);
+  }
+  const off = withRefreshEnv({ BIFROST_MEMORY_MIN_SIM: '0', BIFROST_MEMORY_RELATIVE_FLOOR: '0' },
+    (fresh) => fresh.budgetFill(unscored).length);
+  assert.strictEqual(off, 2, 'with both floors off the pre-floor behaviour returns');
 });
 
 // --- Group 4: per-project cache key ------------------------------------------------
@@ -2612,4 +2639,46 @@ test('projectQuery: "not a git repository" is no signal, a failing git call is a
   assert.deepStrictEqual(projectQuery(plain, '/nowhere'), { query: path.basename(plain), gitError: false });
   const gone = path.join(plain, 'missing');
   assert.strictEqual(projectQuery(gone, '/nowhere').gitError, true);
+});
+
+// --- Fail-closed result parsing (C-15) -----------------------------------------------
+
+const SCREENPIPE_ROW = { content: 'SCREENPIPE-LEAK', similarity: 0.9, wing: 'screenpipe' };
+const GOOD_ROW = { content: 'GOOD-FACT', similarity: 0.9 };
+
+async function factsFor(reply) {
+  return withStubbedGateway(recordingGateway([], typeof reply === 'string' ? reply : JSON.stringify(reply)),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', null));
+}
+
+test('exclusion applies inside nested result wrappers too', async () => {
+  const shapes = {
+    'data.results': { data: { results: [SCREENPIPE_ROW, GOOD_ROW] } },
+    'result': { result: [SCREENPIPE_ROW, GOOD_ROW] },
+    'data.data.matches': { data: { data: { matches: [SCREENPIPE_ROW, GOOD_ROW] } } },
+    'mcp content block': { content: [{ type: 'text', text: JSON.stringify([SCREENPIPE_ROW, GOOD_ROW]) }] },
+  };
+  for (const [name, reply] of Object.entries(shapes)) {
+    const facts = await factsFor(reply);
+    assert.deepStrictEqual(facts.map((f) => f.content), ['GOOD-FACT'], name);
+  }
+});
+
+test('an unrecognised shape goes through the regex extractor, whose rows count as unscored and are dropped', async () => {
+  const text = 'prefix ' + JSON.stringify({ hits: [SCREENPIPE_ROW, GOOD_ROW] });
+  assert.deepStrictEqual(await factsFor(text), []);
+  assert.deepStrictEqual(await factsFor({ hits: [SCREENPIPE_ROW, GOOD_ROW] }), []);
+});
+
+test('unscored rows next to scored ones do not bypass the floor', async () => {
+  const facts = await factsFor([GOOD_ROW, { content: 'NO-SCORE' }, 'a bare string']);
+  assert.deepStrictEqual(facts.map((f) => f.content), ['GOOD-FACT']);
+});
+
+test('parseStructured finds a bare array, results, matches and facts wrappers', () => {
+  for (const key of ['results', 'matches', 'facts']) {
+    assert.strictEqual(parseStructured(JSON.stringify({ [key]: [GOOD_ROW] })).length, 1, key);
+  }
+  assert.strictEqual(parseStructured(JSON.stringify({ data: { results: [] } })).length, 0);
+  assert.strictEqual(parseStructured(JSON.stringify({ error: 'x' })), null);
 });

@@ -174,19 +174,38 @@ function formatProvenance(provenance) {
 
 // Best-effort structured parse of a memory_search response: an array of
 // {content|text, relevance|similarity|score[, provenance]} objects, optionally
-// wrapped in {results:[...]} / {matches:[...]} / {facts:[...]}. Non-fact elements
+// wrapped as findResults describes. Non-fact elements
 // such as {_system_warnings:[...]} are ignored. Returns null (not an array) if the
 // shape isn't recognized, so callers can fall back to the legacy regex scan.
 // `similarity`/`score` are other gateways' spellings, not luca-memory compatibility.
+// The result array of a memory_search response: the value itself, or the first array
+// under results / matches / facts / data / result, looked up through nested wrappers
+// ({"data":{"results":[...]}}, as code mode may return) up to three levels deep, or in
+// the JSON text of an MCP {"content":[{"type":"text","text":"[...]"}]} block.
+function findResults(data, depth = 0) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object' || depth > 3) return null;
+  for (const key of ['results', 'matches', 'facts', 'data', 'result']) {
+    const found = findResults(data[key], depth + 1);
+    if (found) return found;
+  }
+  if (Array.isArray(data.content)) {
+    for (const block of data.content) {
+      if (!block || block.type !== 'text' || typeof block.text !== 'string') continue;
+      let inner;
+      try { inner = JSON.parse(block.text); } catch (_) { continue; }
+      const found = findResults(inner, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function parseStructured(text) {
   if (!text) return null;
   let data;
   try { data = JSON.parse(text); } catch (_) { return null; }
-  const arr = Array.isArray(data) ? data
-    : Array.isArray(data && data.results) ? data.results
-    : Array.isArray(data && data.matches) ? data.matches
-    : Array.isArray(data && data.facts) ? data.facts
-    : null;
+  const arr = findResults(data);
   if (!arr) return null;
   return arr
     .filter((item) => !isExcludedForInjection(item))
@@ -290,8 +309,8 @@ function actionableWarnings(warnings) {
 
 // Last resort: regex-scan raw "content":"..." pairs when the response isn't
 // parseable JSON in a recognized shape (unknown format, or a plain text blob).
-// No similarity data available — every result is kept (matches pre-adaptive-sizing
-// behavior) subject only to MAX_FACTS/SNIPPET_LEN.
+// No similarity data and no row metadata: every result is unscored, so budgetFill
+// drops them all while a floor is active (the default).
 function extractFactsLegacy(text) {
   if (!text) return [];
   const facts = [];
@@ -311,10 +330,12 @@ function truncate(s, len) {
 }
 
 // Greedily fill a char budget from the highest-similarity results first.
-// Results with a numeric similarity below MIN_SIM are dropped; results with
-// unknown similarity (legacy/unstructured responses) are always kept, so
-// behavior degrades to "cap at MAX_FACTS, flat SNIPPET_LEN" — i.e. exactly
-// the pre-adaptive-sizing behavior — when no similarity data is available.
+// Results with a numeric similarity below MIN_SIM are dropped. Results with unknown
+// similarity (legacy/unstructured responses) are kept only when BOTH floors are
+// disabled (MIN_SIM and RELATIVE_FLOOR are 0), which restores the pre-adaptive-sizing
+// behavior of "cap at MAX_FACTS, flat SNIPPET_LEN". While any floor is active an
+// unscored row cannot show it clears the floor, so it is dropped: otherwise a response
+// shape we fail to score would bypass the floor and the exclusion list entirely.
 //
 // On top of the absolute floor there is a RELATIVE one, and it is the one that
 // actually bites. Measured across 63 local project caches: 251 of 378 injected facts
@@ -344,7 +365,8 @@ function budgetFill(results) {
   const kept = known.filter((r) => r.similarity >= floor);
   kept.sort((a, b) => b.similarity - a.similarity);
 
-  const pool = kept.concat(unknown); // scored-and-relevant first, then unscored
+  const floorActive = MIN_SIM > 0 || RELATIVE_FLOOR > 0;
+  const pool = floorActive ? kept : kept.concat(unknown); // scored first, then unscored
   const out = [];
   let charsUsed = 0;
 
