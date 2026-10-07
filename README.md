@@ -289,7 +289,7 @@ results within a character budget (higher-similarity facts get a larger snippet)
 | `BIFROST_MEMORY_MAX_FACTS` | Cap on facts injected per section (memory, KB) | `6` |
 | `BIFROST_MEMORY_SNIPPET_LEN` | Base per-fact snippet length in characters | `180` |
 | `BIFROST_INJECT_BUDGET` | Total character budget per section (~4 chars/token) | `2000` (~500 tokens) |
-| `BIFROST_MEMORY_MIN_SIM` | Drop `memory_search` results below this similarity score | `0.45` |
+| `BIFROST_MEMORY_MIN_SIM` | Drop `memory_search` results below this score. Applies to luca-memory's `similarity` field (true cosine); needs a luca-memory that returns it, since older servers return only the RRF `relevance` and then nothing is injected. 0.55 comes from a replay of 770 real hook calls (judged precision about 0.82 at 0.55 vs 0.73 at 0.45) | `0.55` |
 | `BIFROST_MEMORY_FAST` | Set to `1` to pass `fast:true` to `memory_search` (server-side fast path) | `0` (off — opt-in until the gateway ships the param) |
 
 If `memory_search` returns similarity/score metadata, results are ranked and

@@ -5,8 +5,9 @@
 // and allowed to take as long as the backend needs — it runs AFTER the hook
 // exits, so session start never waits on the gateway (which can be slow or down).
 //
-// Usage: node refresh.cjs <cacheFile> <memoryQuery>
-// Writes {at, skills:{server,mode[,count]},
+// Usage: node refresh.cjs <cacheFile> --dir <projectDir>   (builds the query via git)
+//        node refresh.cjs <cacheFile> <memoryQuery>         (older session-start; '' = skip)
+// Writes {v, at, skills:{server,mode[,count]},
 // memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince]},
 // kb:{...}} to the cache file. Silent-fail; always exits 0.
 //
@@ -20,8 +21,7 @@
 //   BIFROST_MEMORY_SNIPPET_LEN — base per-fact snippet length in chars (default 180)
 //   BIFROST_INJECT_BUDGET     — total char budget per section (default ~2000,
 //                               ~500 tokens at ~4 chars/token)
-//   BIFROST_MEMORY_MIN_SIM    — drop results below this similarity (default 0, i.e.
-//                               no floor; scores are not comparable across servers)
+//   BIFROST_MEMORY_MIN_SIM    — drop results below this `similarity` (default 0.55)
 //   BIFROST_MEMORY_FAST       — set to 1 to pass fast:true to memory_search
 //                               (server-side fast path; opt-in until the live
 //                               gateway ships the param — an unknown param on a
@@ -49,21 +49,16 @@
 // memory_search alone, and this data already rides along for free on that call.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
+const { projectQuery } = require('./lib/project-query.cjs');
 
 const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency is free
 const DEFAULT_MAX_FACTS = 6;
 const DEFAULT_SNIPPET_LEN = 180;
 const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
-// No similarity floor by default. Relevance scores are not comparable across memory
-// servers — cosine, dot-product and BM25-fused scores do not share a scale, and this
-// gateway's own measured range (0.381-0.415) sat entirely BELOW the previous 0.45
-// default, so every scored fact was dropped and the memory section silently rendered
-// empty. Ranking plus MAX_FACTS and the char budget already bound what gets injected;
-// a hard threshold on an unknown scale only ever removed good results. Set
-// BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
 // Measured, not guessed. Across 63 local project caches the per-project BEST hit had
 // median 0.563 (p25 0.513, p90 0.635, max 0.767), and 251 of 378 injected facts scored
 // under 0.55 — two thirds of the section was filler, and on several projects every
@@ -72,13 +67,14 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // CORRECT outcome: the corpus holds nothing relevant for them, the section degrades to
 // empty, and the agent is told to search once it knows the task.
 //
-// The earlier 0.45 default was removed because this gateway's scores sat below it and
-// the section rendered empty — read at the time as "the floor is wrong". The data says
-// the retrieval is weak and removing the floor only hid it. A floor plus an honest
-// empty section beats six confident-looking irrelevant facts.
-// Applies to the `similarity` field (true cosine) that luca-memory is adding. It is NOT
-// meaningful for `relevance`, which luca-memory returns as an RRF value (~0.016-0.075).
+// Applies to luca-memory's `similarity` field (true cosine); an older server that only
+// returns the RRF `relevance` (~0.016-0.075) never clears it, so nothing is injected.
+// 0.55 comes from a replay of 770 real hook calls: judged precision ~0.82 at 0.55 vs
+// ~0.73 at 0.45.
 const DEFAULT_MIN_SIM = 0.55;
+// Cache schema. v2: facts come from the project query and the private-row exclusion;
+// session-start does not render facts from an older cache.
+const CACHE_SCHEMA = 2;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
 // Per warning type, because the three luca-memory actually emits
 // (memory_lib.get_system_warnings: pending_contradictions, stale_memories,
@@ -140,16 +136,20 @@ const EXCLUDED_FOR_INJECTION = {
 // Looks at the RAW item, before formatProvenance folds provenance into content text.
 function isExcludedForInjection(item) {
   if (!item || typeof item !== 'object') return false;
+  const lower = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+  const x = EXCLUDED_FOR_INJECTION;
+  const provStr = typeof item.provenance === 'string' ? item.provenance.toLowerCase() : '';
   const prov = item.provenance && typeof item.provenance === 'object' && !Array.isArray(item.provenance)
     ? item.provenance : {};
   const meta = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
-  const lower = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
-  const x = EXCLUDED_FOR_INJECTION;
-  if (x.wings.includes(lower(prov.wing))) return true;
+  if (provStr && [...x.wings.map((w) => `wing=${w}`), `scope=${x.scope}`, 'session-summary']
+    .some((needle) => provStr.includes(needle))) return true;
+  if ([prov.wing, item.wing].some((v) => x.wings.includes(lower(v)))) return true;
   if (x.sourceTypes.includes(lower(prov.source_type)) || x.sourceTypes.includes(lower(item.source_type))) return true;
   if ([prov.scope, meta.scope, item.scope].some((v) => lower(v) === x.scope)) return true;
-  const rawTags = prov.tags != null ? prov.tags : item.tags;
-  const tags = (Array.isArray(rawTags) ? rawTags : String(rawTags || '').split(','))
+  // Union, not first-present: a row can carry tags in several places.
+  const tags = [prov.tags, item.tags, meta.tags]
+    .flatMap((t) => (Array.isArray(t) ? t : String(t == null ? '' : t).split(',')))
     .map(lower);
   return tags.some((t) => x.tags.includes(t));
 }
@@ -388,9 +388,15 @@ async function searchFacts(cap, query, wing, warningsOut) {
 
 async function main() {
   const cacheFile = process.argv[2];
-  // '' means session-start found no project signal: skip recall rather than search on
-  // a generic default. A missing argv (manual run) still gets the old default query.
-  const query = process.argv[3] === undefined ? 'recent decisions gotchas conventions' : process.argv[3];
+  // '' means no project signal: skip recall rather than search on a generic default.
+  // A missing argv (manual run) still gets the old default query.
+  let query = process.argv[3] === undefined ? 'recent decisions gotchas conventions' : process.argv[3];
+  // True when git timed out or failed (not "no repo"): the empty query is then unknown,
+  // not a deliberate skip, so the old facts must survive via carry-forward.
+  let gitError = false;
+  if (process.argv[3] === '--dir') {
+    ({ query, gitError } = projectQuery(process.argv[4] || process.cwd(), os.homedir()));
+  }
 
   // Signed plugin-config refresh. Independent of the inject cache below (different
   // endpoint, different env), so it runs first and unconditionally — a gateway with
@@ -406,7 +412,7 @@ async function main() {
   const caps = await gw.getCapabilities(TIMEOUT_MS);
   if (!caps) return;
 
-  const out = { at: Date.now() };
+  const out = { v: CACHE_SCHEMA, at: Date.now() };
 
   if (caps.skills) {
     // No library size here on purpose. Telling the model "N skills available" is the
@@ -426,7 +432,7 @@ async function main() {
       mode: caps.memory.mode,
       facts: query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
     };
-    if (!query) out.memory.skipped = 'no-signal';
+    if (!query && !gitError) out.memory.skipped = 'no-signal';
     // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
     // stays on memory_search alone. session-start renders without it.
 
@@ -443,7 +449,7 @@ async function main() {
     if (kbWing) {
       out.kb = kbQuery
         ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) }
-        : { server: caps.memory.server, facts: [], skipped: 'no-signal' };
+        : { server: caps.memory.server, facts: [], ...(gitError ? {} : { skipped: 'no-signal' }) };
     }
   }
 
@@ -453,6 +459,11 @@ async function main() {
   // Mirrors the fail-closed contract the signed plugin-config path already has.
   try {
     const prev = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    // Facts cached before v2 came from the old query and are never rendered; do not
+    // carry them forward under a v2 stamp.
+    if (!(prev.v >= CACHE_SCHEMA)) {
+      for (const k of ['memory', 'kb']) if (prev[k]) prev[k].facts = [];
+    }
     mergeWithPrevious(out, prev);
   } catch (_) { /* no previous cache — nothing to preserve */ }
 

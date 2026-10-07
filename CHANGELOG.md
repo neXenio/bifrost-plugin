@@ -4,25 +4,45 @@ All notable changes to bifrost-plugin are documented here.
 
 ## Unreleased
 
-**Recall queries now come from the project, and generic sessions skip recall.** The
-memory query used to be the directory name plus a fixed "recent decisions, gotchas,
-conventions, open work" suffix. Directory names like `.cursor`, `full_context`,
-`Desktop` or a home directory produced generic queries that pulled unrelated chatter.
-The query is now built from the git remote name (else toplevel, else directory), the
-ticket key found in the branch or directory name, and up to five branch words. When
-none of that exists, the query is empty, no recall runs, and previously cached facts
-are not carried forward.
+**Recall queries now come from the project, and sessions without project signal skip
+recall.** The memory query used to be the directory name plus a fixed "recent
+decisions, gotchas, conventions, open work" suffix. Directory names like `.cursor`,
+`full_context`, `Desktop` or a home directory produced generic queries that pulled
+unrelated chatter.
 
+- The query is built from the git remote name (else toplevel, else directory name),
+  the ticket key in the branch or directory name, and up to five branch words, with
+  duplicates removed. A ticket key alone is not a signal: in a replay of 770 real hook
+  calls, queries that were only a key (179 calls) matched short company facts and none
+  of the 25 judged results was relevant. With no repo name and no topic word the query
+  is empty, recall is skipped and previously cached facts are not carried forward.
+- Ticket keys match exact case only (`LUCA-123`, also in `LUCA-123_foo`), so
+  `fix-login-2`, `hotfix-1234`, `bump-node-18` and `utf-8` are no longer read as keys.
+  A repo rooted at `$HOME` is ignored, remote name included. A remote name that is
+  empty or purely numeric (`ssh://git@host:2222/`) is ignored.
+- The git lookups moved out of the 5 s SessionStart hook. session-start now runs
+  `refresh.cjs <cacheFile> --dir <projectDir>` and the detached worker builds the
+  query, with a 2 s timeout per git call. A git timeout or error (anything other than
+  "not a git repository") is not treated as "no signal": the cache is not marked
+  skipped and the normal carry-forward keeps the previous facts. The old form
+  `refresh.cjs <cacheFile> <query>` still works.
+- The cache carries `v: 2`. session-start does not render facts from a cache without
+  it (skills, server and mode are still used), so facts from the old generic query or
+  from before the exclusion list are not shown after upgrading, and are not carried
+  forward either.
 - Scoring prefers `similarity`, then `score`, then `relevance`. luca-memory's
   `relevance` is an RRF value (about 0.016 to 0.075) and never clears the floor, so a
   server without a `similarity` field injects nothing.
-- Rows from the `screenpipe` or `personal` wing, with source type `screenpipe` or
-  `claude-session`, tagged `session-summary`, `source:screenpipe`, `source:email` or
-  `source:superhuman`, or with scope `private` are dropped client side. Tags
-  `source:conversation` and `session:*` are kept, since `/reflect-all` stores durable
-  facts under them.
-- `DEFAULT_MIN_SIM` (0.55) now documents that it applies to the `similarity` cosine
-  field. Final value pending calibration.
+- Rows are dropped client side when the wing (on provenance or the item) is
+  `screenpipe` or `personal`, the source type is `screenpipe` or `claude-session`, the
+  scope is `private`, or any tag is `session-summary`, `source:screenpipe`,
+  `source:email` or `source:superhuman`. Tags are the union of provenance, item and
+  metadata tags (array or comma string), and a string provenance is scanned for the
+  same markers. Tags `source:conversation` and `session:*` are kept, since
+  `/reflect-all` stores durable facts under them.
+- `BIFROST_MEMORY_MIN_SIM` defaults to 0.55 and applies to the `similarity` cosine
+  field. Chosen from the 770-call replay: judged precision about 0.82 at 0.55 vs 0.73
+  at 0.45.
 
 ## [1.7.3] — 2026-08-19
 

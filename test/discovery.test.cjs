@@ -446,7 +446,7 @@ function seedCache(home, projDir, payload) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `inject-${label}-${digest}.json`),
-    JSON.stringify(Object.assign({ at: Date.now() }, payload))
+    JSON.stringify(Object.assign({ v: 2, at: Date.now() }, payload))
   );
   return dir;
 }
@@ -1529,6 +1529,7 @@ function sessionWithCacheAge(ageMinutes, extraEnv) {
   const label = path.basename(proj).replace(/[^A-Za-z0-9_-]/g, '_');
   const digest = crypto.createHash('sha256').update(proj).digest('hex').slice(0, 12);
   fs.writeFileSync(path.join(dir, `inject-${label}-${digest}.json`), JSON.stringify({
+    v: 2,
     at,
     skills: { server: 's', mode: 'flat' },
     memory: { server: 'm', mode: 'flat', total: 1, facts: [{ content: 'f' }] },
@@ -2436,10 +2437,47 @@ test('a warning with no message falls back to a synthesized "<count> <type>" lin
 const { buildQuery } = sessionStart;
 const { mergeWithPrevious: mergeSkipped } = require('../hooks/refresh.cjs');
 
-test('buildQuery: Orca task dir yields the ticket key', () => {
+test('buildQuery: a bare ticket key is not a signal', () => {
   assert.strictEqual(
-    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }),
-    'LUCA-35536');
+    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }), '');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/LUCA-1', home: '/h', toplevel: '/h/orca/LUCA-1', branch: 'LUCA-1' }), '');
+});
+
+test('buildQuery: ticket key stays when there is a repo or topic word; repo holding the key is dropped', () => {
+  const dir = '/h/orca/task-LUCA-35536-web-collection-123';
+  const branch = 'task-LUCA-35536-web-collection-123';
+  assert.strictEqual(
+    buildQuery({ dir, home: '/h', remoteUrl: 'git@gitlab.com:g/luca-web.git', toplevel: dir, branch }),
+    'luca-web LUCA-35536 web collection');
+  assert.strictEqual(buildQuery({ dir, home: '/h', toplevel: dir, branch }), 'LUCA-35536 web collection');
+});
+
+test('buildQuery: ticket keys are exact-case only', () => {
+  const q = (branch) => buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch });
+  assert.strictEqual(q('fix-login-2'), 'r login');
+  assert.strictEqual(q('hotfix-1234'), 'r');
+  assert.strictEqual(q('bump-node-18'), 'r bump node');
+  assert.strictEqual(q('fix/utf-8-handling'), 'r utf handling');
+  assert.strictEqual(q('feature/LUCA-123_foo'), 'r LUCA-123 foo');
+});
+
+test('buildQuery: a repo at $HOME ignores its remote too, with Windows separators and case', () => {
+  assert.strictEqual(buildQuery({
+    dir: 'C:/Users/Me/Desktop', home: 'c:\\users\\me', remoteUrl: 'git@x:me/dotfiles.git',
+    toplevel: 'C:/Users/Me', branch: 'main' }), '');
+});
+
+test('buildQuery: remote name splits on : and \\, and rejects a numeric last segment', () => {
+  const q = (remoteUrl) => buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl, toplevel: '/h/x/foo' });
+  assert.strictEqual(q('ssh://git@host:2222/'), 'foo');
+  assert.strictEqual(q('host:repo.git'), 'repo');
+  assert.strictEqual(q('C:\\git\\repo.git'), 'repo');
+});
+
+test('buildQuery: tokens are deduplicated case-insensitively', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/web', home: '/h', toplevel: '/h/web', branch: 'fix/Web-web-WEB-api' }), 'web api');
 });
 
 test('buildQuery: repo from remote url, plus branch words without prefix or generic tokens', () => {
@@ -2493,6 +2531,24 @@ test('isExcludedForInjection drops private, mail and screen-capture rows', () =>
   assert.ok(ex({ metadata: { scope: 'private' } }));
 });
 
+test('isExcludedForInjection unions tags across provenance, item and metadata', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ provenance: { tags: ['ok'] }, tags: ['session-summary'] }));
+  assert.ok(ex({ provenance: { tags: 'ok' }, metadata: { tags: 'a, Source:Email' } }));
+  assert.ok(ex({ metadata: { tags: ['source:screenpipe'] } }));
+  assert.ok(ex({ tags: 'x,source:superhuman' }));
+});
+
+test('isExcludedForInjection checks wing on the item and scans a string provenance', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ wing: 'Personal' }));
+  assert.ok(ex({ provenance: 'subject=x, wing=screenpipe, room=y' }));
+  assert.ok(ex({ provenance: 'wing=personal' }));
+  assert.ok(ex({ provenance: 'tags=a,session-summary' }));
+  assert.ok(ex({ provenance: 'Scope=Private' }));
+  assert.ok(!ex({ provenance: 'subject=x, wing=team' }));
+});
+
 test('isExcludedForInjection keeps durable facts, including reflect-all session tags', () => {
   const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
   assert.ok(!ex({}));
@@ -2525,4 +2581,28 @@ test('mergeWithPrevious does not carry KB facts over a skipped KB run', () => {
   const out = mergeSkipped(
     { at: 2000, kb: { server: 'm', facts: [], skipped: 'no-signal' } }, prev, 2000);
   assert.deepStrictEqual(out.kb.facts, []);
+});
+
+test('facts from a cache without v>=2 are not rendered, but skills still are', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    v: undefined,
+    skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
+    memory: { server: 'teammemory', mode: 'flat', facts: [{ content: 'OLD-GENERIC-FACT' }] },
+    kb: { server: 'teammemory', facts: [{ content: 'OLD-KB-FACT' }] },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.ok(!r.stdout.includes('OLD-GENERIC-FACT'));
+  assert.ok(!r.stdout.includes('OLD-KB-FACT'));
+  assert.ok(r.stdout.includes('teamskills'));
+  assert.ok(r.stdout.includes('teammemory'));
+});
+
+test('projectQuery: "not a git repository" is no signal, a failing git call is an error', () => {
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'plain-'));
+  assert.deepStrictEqual(projectQuery(plain, '/nowhere'), { query: path.basename(plain), gitError: false });
+  const gone = path.join(plain, 'missing');
+  assert.strictEqual(projectQuery(gone, '/nowhere').gitError, true);
 });
