@@ -80,27 +80,27 @@ machines onboarded before the plugin existed:
    loses every name conflict, so the org copy never loads while the marketplace
    copy is installed.
 
-Set `"default": true` on `migrate_legacy` in the private mirror. Once a day, a
-detached worker (`hooks/migrate-legacy.cjs`) moves the key of a matching
-`bifrost` entry into the plugin's key cache and runs `claude mcp remove bifrost`
-(user scope, and local scope where that is unambiguous). Only an entry named
-`bifrost` whose URL equals the gateway is touched, and only when a key for the
-gateway exists afterwards. Claude Desktop's own `claude_desktop_config.json` is
-not read by Claude Code at startup and does not collide.
+**Case 1: `migrate_legacy`.** Set `"default": true` on `migrate_legacy` in the
+private mirror. Once a day, a detached worker (`hooks/migrate-legacy.cjs`) moves
+the key of a matching `bifrost` entry into the plugin's key cache and runs
+`claude mcp remove bifrost` (user scope, and local scope where that is
+unambiguous). Only an entry named `bifrost` whose URL equals the gateway is
+touched, and only when a key for the gateway exists afterwards. Claude Desktop's
+own `claude_desktop_config.json` is not read by Claude Code at startup and does
+not collide.
 
-Case 2 is only reachable from the marketplace copy itself, i.e. from the public
-1.8.0, where `migrate_legacy` defaults to false, so the self-uninstall needs the
-user to switch the option on. When it is on, the copy checks that it is the
-`@bifrost-marketplace` install (`installed_plugins.json` install path), that the
-signed-in account's synced bucket (`plugins/synced/<org>_<account>/`) holds the
-plugin, that the synced copy is not disabled and that no API key or token
-override is set, then runs `claude plugin uninstall
-bifrost-plugin@bifrost-marketplace`. For a fleet, the reliable route is managed
-settings, which need no cooperation from the old copy:
+**Case 2: managed settings.** Disable the marketplace copy fleet-wide through
+managed settings (MDM profile or `managed-settings.json`):
 
 ```json
 { "enabledPlugins": { "bifrost-plugin@bifrost-marketplace": false } }
 ```
+
+Per the plugin loading docs only an *enabled* plugin of another origin wins the
+name conflict, so with the marketplace copy disabled the synced copy loads. This
+needs no cooperation from the old copy, which matters because the old copy is
+the public build. Users can uninstall the disabled copy at leisure with
+`claude plugin uninstall bifrost-plugin@bifrost-marketplace`.
 
 ## Per-user onboarding (what each engineer does)
 

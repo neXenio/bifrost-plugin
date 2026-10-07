@@ -33,7 +33,7 @@
     "migrate_legacy": {
       "type": "boolean",
       "title": "Clean up older Bifrost setups",
-      "description": "Once a day, move the key of a hand-added bifrost MCP server for this gateway into the plugin and remove that server, and uninstall a marketplace copy of this plugin when your organization already provides it. Off by default.",
+      "description": "Once a day, move the key of a hand-added bifrost MCP server for this gateway into the plugin and remove that server, which otherwise hides the plugin's own. Off by default.",
       "default": false
     }
   }
