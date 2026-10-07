@@ -697,6 +697,13 @@ function emitStaleNotice(file, cache, disc, signingIn) {
       );
       return;
     }
+    // Another session's sign-in is still waiting in the browser.
+    const lockAt = readAt(AUTO_LOGIN_LOCK);
+    if (lockAt !== null && Date.now() - lockAt < AUTO_LOGIN_LOCK_STALE_MS) {
+      process.stdout.write('\n🔑 A Bifrost sign-in is in progress in your browser. Once the page says ' +
+        'connected, run `/mcp` → bifrost → Reconnect (not Authenticate), or restart Claude Code.\n');
+      return;
+    }
     process.stdout.write(
       '\n⚠️ Bifrost is not configured for hooks: no gateway URL/key found in the ' +
       'environment or in ~/.claude.json. Skill, memory and tool discovery are ' +

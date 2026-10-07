@@ -299,7 +299,13 @@ test('session-start: enabled + no key + interactive startup → one sign-in noti
   assert.doesNotMatch(r.stdout, /Run `\/bifrost-setup` to fix/);
   assert.ok(fs.existsSync(attemptFile(home)));
 
-  // Second start inside the cooldown: back to the ordinary not-configured line.
+  // Second start while that sign-in is in flight: says so instead of "not configured".
+  const inFlight = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, home);
+  assert.doesNotMatch(inFlight.stdout, NOTICE);
+  assert.match(inFlight.stdout, /sign-in is in progress/);
+
+  // Inside the cooldown with no sign-in running: back to the ordinary not-configured line.
+  fs.rmSync(path.join(home, '.cache', 'bifrost-plugin', 'auto-login.lock'), { force: true });
   const again = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, home);
   assert.doesNotMatch(again.stdout, NOTICE);
   assert.match(again.stdout, /Run `\/bifrost-setup` to fix/);
