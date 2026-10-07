@@ -41,6 +41,11 @@ const TIMEOUT_MS = parseInt(process.env.BIFROST_SETUP_TIMEOUT_MS || '300000', 10
 // After a timeout (tab closed, login abandoned) the next startup may retry sooner than
 // the normal 6 h cooldown in session-start.cjs.
 const TIMEOUT_COOLDOWN_MS = 30 * 60 * 1000;
+// Claude Code writes its needs-auth record only after the whole connect attempt failed,
+// about 3 s after the helper ran on the real gateway (2.1.293). A sign-in that lands in
+// that window would clear the record before it exists and a restart would still skip
+// the server, so after a successful sign-in keep dropping the record for a while.
+const NEEDS_AUTH_WATCH_MS = parseInt(process.env.BIFROST_NEEDS_AUTH_WATCH_MS || '90000', 10);
 
 const STATE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const RESULT_MARKER = path.join(STATE_DIR, 'auto-setup-result.json');
@@ -141,30 +146,36 @@ function main() {
       if (done) { res.writeHead(200); return res.end(); }
       done = true;
       const ok = keyCache.write(gateway, vk);
-      if (ok) {
-        try { fs.unlinkSync(ATTEMPT_MARKER); } catch (_) {}
-        keyCache.clearNeedsAuth(`plugin:${pluginName()}:bifrost`);
-      }
+      if (ok) { try { fs.unlinkSync(ATTEMPT_MARKER); } catch (_) {} }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end('<!doctype html><meta charset="utf-8"><title>Bifrost</title>' +
         '<body style="font:15px -apple-system,sans-serif;max-width:420px;margin:14vh auto;text-align:center">' +
-        (ok ? '<h2>✓ Bifrost connected</h2><p>You can close this tab. Restart Claude Code, or in ' +
-              'a running session run <code>/mcp</code>, pick <b>bifrost</b> and choose ' +
-              '<b>Reconnect</b> (not Authenticate).</p>'
+        (ok ? '<h2>✓ Bifrost connected</h2><p>You can close this tab. In Claude Code run ' +
+              '<code>/mcp</code> → <b>bifrost</b> → <b>Reconnect</b> (not Authenticate), ' +
+              'or restart Claude Code.</p>'
             : '<h2>Key received</h2><p>Could not save it on this machine. Run <code>/bifrost-setup</code>.</p>') +
         '</body>');
       writeResult(ok ? { ok: true, how: 'key-cache' } : { ok: false, reason: 'persist-failed' });
-      cleanup();
+      cleanup(ok);
     } catch (e) {
       writeResult({ ok: false, reason: 'callback-error' });
       cleanup();
     }
   });
 
-  function cleanup() {
+  function cleanup(watchNeedsAuth) {
     try { server.close(); } catch (_) {}
     clearTimeout(timer);
-    finish();
+    if (!watchNeedsAuth) return finish();
+    releaseLock();
+    const key = `plugin:${pluginName()}:bifrost`;
+    const end = Date.now() + NEEDS_AUTH_WATCH_MS;
+    const tick = () => {
+      keyCache.clearNeedsAuth(key);
+      if (Date.now() >= end) return finish();
+      setTimeout(tick, 1000);
+    };
+    tick();
   }
 
   const timer = setTimeout(() => {
@@ -189,11 +200,15 @@ function main() {
 // Release the in-flight lock session-start.cjs took before spawning us, and only that
 // one: it passes the lock's token, so a /bifrost-setup run (no token) or a worker whose
 // lock was taken over never deletes a lock another session holds.
-function finish() {
+function releaseLock() {
   const token = process.env.BIFROST_AUTO_LOGIN_LOCK_TOKEN;
   try {
     if (token && JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')).token === token) fs.unlinkSync(LOCK_FILE);
   } catch (_) {}
+}
+
+function finish() {
+  releaseLock();
   process.exit(0);
 }
 

@@ -21,9 +21,9 @@ Installing prompts for the plugin's config values:
   gateway operator issued you. Leave it blank to use auto-login instead.
 - **Sign in automatically** (`auto_login`, default off): when no key is set,
   the first interactive session opens your browser for company sign-in and
-  caches the key it gets back in `~/.cache/bifrost-plugin/vk`. Afterwards
-  restart Claude Code, or in a running session run `/mcp`, pick `bifrost` and
-  choose Reconnect (not Authenticate). `BIFROST_AUTO_LOGIN=1` does the same
+  caches the key it gets back in `~/.cache/bifrost-plugin/vk`. Afterwards run
+  `/mcp` → `bifrost` → Reconnect (not Authenticate), or restart Claude Code.
+  `BIFROST_AUTO_LOGIN=1` does the same
   from the shell. If the key was rotated or revoked, the plugin drops the
   cached copy on the next 401 and signs in again; to force that by hand,
   `rm ~/.cache/bifrost-plugin/vk`.
@@ -78,8 +78,7 @@ node "${CLAUDE_PLUGIN_ROOT}/hooks/auto-setup.cjs"
 
 It opens the keyapp in your browser, receives your key on a loopback-only,
 nonce-gated listener, and caches it for the plugin's `bifrost` server. Then
-restart Claude Code, or in a running session run `/mcp`, pick `bifrost` and
-choose Reconnect (not Authenticate).
+run `/mcp` → `bifrost` → Reconnect (not Authenticate), or restart Claude Code.
 
 ## After install
 

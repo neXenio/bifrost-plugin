@@ -692,8 +692,7 @@ function emitStaleNotice(file, cache, disc, signingIn) {
     if (signingIn) {
       process.stdout.write(
         '\n🔑 Opening your browser for Bifrost sign-in. Once the page says connected, ' +
-        'restart Claude Code, or in this session run `/mcp`, pick bifrost and choose ' +
-        'Reconnect (not Authenticate).\n'
+        'run `/mcp` → bifrost → Reconnect (not Authenticate), or restart Claude Code.\n'
       );
       return;
     }

@@ -26,11 +26,12 @@ on.
   it opens Chrome when installed, the default browser otherwise.
 - New options: `auto_login` (boolean, default false) and `keyapp_url` (defaults to the
   gateway's own host when auto-login is on). `BIFROST_AUTO_LOGIN=1` also turns it on.
-- After the key is cached, the sign-in worker deletes this plugin's entry from
-  `~/.claude/mcp-needs-auth-cache.json`. Claude Code records the first 401 there and
-  skips the server for 15 minutes, so without this a restart right after sign-in
-  came up without bifrost tools. Every message now says: restart Claude Code, or run
-  `/mcp`, pick bifrost and choose Reconnect (not Authenticate).
+- After the key is cached, the sign-in worker keeps deleting this plugin's entry
+  from `~/.claude/mcp-needs-auth-cache.json` for 90 seconds. Claude Code records the
+  first 401 there, seconds after the connect attempt started, and skips the server
+  for 15 minutes, so without this a restart right after sign-in came up without
+  bifrost tools. Every message now says: `/mcp` → bifrost → Reconnect (not
+  Authenticate), or restart Claude Code.
 - A 401 for the cached key (rotated or revoked in the key page) drops the cache and
   the cooldown marker, so the next startup signs in again. Network errors and 5xx
   never do. Manual reset: `rm ~/.cache/bifrost-plugin/vk`.

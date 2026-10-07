@@ -295,7 +295,7 @@ test('session-start: enabled + no key + interactive startup → one sign-in noti
   const r = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, NOTICE);
-  assert.match(r.stdout, /choose Reconnect \(not Authenticate\)/);
+  assert.match(r.stdout, /run `\/mcp` → bifrost → Reconnect \(not Authenticate\), or restart/);
   assert.doesNotMatch(r.stdout, /Run `\/bifrost-setup` to fix/);
   assert.ok(fs.existsSync(attemptFile(home)));
 
@@ -389,6 +389,7 @@ function startWorker(home, env) {
       CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
       BIFROST_URL: GW,
       BIFROST_KEYAPP_URL: 'https://keyapp.example.invalid',
+      BIFROST_NEEDS_AUTH_WATCH_MS: '0',
       ...env,
     },
     stdio: 'ignore',
@@ -405,7 +406,7 @@ async function waitFor(fn, ms = 5000) {
   }
 }
 
-test('worker: a successful sign-in caches the key and drops only this plugin\'s needs-auth entry', async () => {
+test('worker: a successful sign-in caches the key and drops this plugin\'s needs-auth entry, also when it appears late', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-worker-'));
   const cfgDir = path.join(home, '.claude');
   fs.mkdirSync(cfgDir, { recursive: true });
@@ -414,17 +415,27 @@ test('worker: a successful sign-in caches the key and drops only this plugin\'s 
   fs.writeFileSync(needsAuth, JSON.stringify({ [`plugin:${name}:bifrost`]: { timestamp: 1 }, 'plugin:other:x': { timestamp: 2 } }));
   try { fs.unlinkSync(SHIM_LOG); } catch (_) {}
 
-  const exited = startWorker(home, { BIFROST_SETUP_TIMEOUT_MS: '8000' });
+  const exited = startWorker(home, { BIFROST_SETUP_TIMEOUT_MS: '8000', BIFROST_NEEDS_AUTH_WATCH_MS: '3000' });
   const line = await waitFor(() => { try { return fs.readFileSync(SHIM_LOG, 'utf8'); } catch (_) { return ''; } });
   const cb = new URL(decodeURIComponent(line.match(/cb=([^\s]+)/)[1]));
   cb.searchParams.set('vk', 'vk_from_signin');
   const status = await new Promise((resolve) => require('http').get(cb, (res) => { res.resume(); resolve(res.statusCode); }));
+  const others = { 'plugin:other:x': { timestamp: 2 } };
+  assert.deepStrictEqual(await waitFor(() => {
+    const cur = JSON.parse(fs.readFileSync(needsAuth, 'utf8'));
+    return Object.keys(cur).length === 1 ? cur : null;
+  }), others, 'existing record dropped right away');
+
+  // N1: Claude Code persists the record seconds AFTER the helper ran, i.e. possibly
+  // after the callback. A record that shows up late is dropped too.
+  await new Promise((r) => setTimeout(r, 1200));
+  fs.writeFileSync(needsAuth, JSON.stringify({ ...others, [`plugin:${name}:bifrost`]: { timestamp: Date.now() } }));
   await exited;
 
   assert.strictEqual(status, 200);
   const cached = JSON.parse(fs.readFileSync(path.join(home, '.cache', 'bifrost-plugin', 'vk'), 'utf8'));
   assert.strictEqual(cached.vk, 'vk_from_signin');
-  assert.deepStrictEqual(JSON.parse(fs.readFileSync(needsAuth, 'utf8')), { 'plugin:other:x': { timestamp: 2 } });
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(needsAuth, 'utf8')), others, 'late record dropped within the watch window');
 });
 
 test('worker: a stale lone BIFROST_URL never decides where the key is cached', async () => {
