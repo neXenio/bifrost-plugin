@@ -2437,9 +2437,16 @@ test('a warning with no message falls back to a synthesized "<count> <type>" lin
 const { buildQuery } = sessionStart;
 const { mergeWithPrevious: mergeSkipped } = require('../hooks/refresh.cjs');
 
-test('buildQuery: a bare ticket key is not a signal', () => {
+test('buildQuery: a ticket-named dir lends its topic words when the branch has none', () => {
   assert.strictEqual(
-    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }), '');
+    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }),
+    'LUCA-35536 web collection');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/LUCA-36578-UI-fixes', home: '/h' }), 'LUCA-36578 UI fixes');
+});
+
+test('buildQuery: a bare ticket key is not a signal', () => {
+  assert.strictEqual(buildQuery({ dir: '/h/orca/LUCA-36122', home: '/h', branch: 'HEAD' }), '');
   assert.strictEqual(
     buildQuery({ dir: '/h/orca/LUCA-1', home: '/h', toplevel: '/h/orca/LUCA-1', branch: 'LUCA-1' }), '');
 });

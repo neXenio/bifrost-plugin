@@ -50,13 +50,18 @@ function buildQuery({ dir, home, remoteUrl, toplevel, branch } = {}) {
   const generic = !d || atHome(d) || d === path.parse(d).root || base.startsWith('.')
     || GENERIC_DIRS.has(base.toLowerCase());
   let repo = remoteName || (top ? path.basename(top) : (generic ? '' : base));
-  if (ticket && repo.toLowerCase().includes(ticket.toLowerCase())) repo = '';
+  let ticketDir = '';
+  if (ticket && repo.toLowerCase().includes(ticket.toLowerCase())) [ticketDir, repo] = [repo, ''];
 
-  const words = String(branch || '')
+  const topicWords = (s) => String(s || '')
     .replace(BRANCH_PREFIX, '')
     .replace(ticket ? new RegExp(ticket.replace(/-/g, '[-_ ]'), 'ig') : /$^/, ' ')
     .split(/[/\-_\s]+/)
     .filter((w) => w.length > 1 && !/^\d+$/.test(w) && !GENERIC_BRANCH_WORDS.has(w.toLowerCase()));
+  // A ticket-named directory (Orca worktree) usually describes the work after the key;
+  // use that when the branch says nothing, e.g. a detached HEAD.
+  let words = topicWords(branch);
+  if (!words.length) words = topicWords(ticketDir);
   if (!repo && !words.length) return '';
 
   const seen = new Set();
