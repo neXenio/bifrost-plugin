@@ -62,4 +62,32 @@ function clear() {
   try { fs.unlinkSync(keyFile()); } catch (_) {}
 }
 
-module.exports = { read, write, clear, keyFile, cacheDir };
+// Claude Code remembers a 401 at connect in <config dir>/mcp-needs-auth-cache.json as
+// { "plugin:<plugin>:<server>": { timestamp } } and, for a server with headers or a
+// headersHelper, skips connecting to it at all for 15 minutes (verified on 2.1.293). A
+// session started right after sign-in would therefore never ask the helper for the new
+// key. Dropping our own entry once the key is cached makes a restart pick it up. The
+// file is undocumented: re-read right before an atomic rewrite, every other entry kept,
+// any failure ignored. Returns true when an entry was removed.
+function needsAuthFile() {
+  const dir = (process.env.CLAUDE_CONFIG_DIR || '').trim() || path.join(os.homedir(), '.claude');
+  return path.join(dir, 'mcp-needs-auth-cache.json');
+}
+
+function clearNeedsAuth(serverKey) {
+  const file = needsAuthFile();
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const entries = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!entries || typeof entries !== 'object' || !Object.prototype.hasOwnProperty.call(entries, serverKey)) return false;
+    delete entries[serverKey];
+    fs.writeFileSync(tmp, JSON.stringify(entries), { encoding: 'utf8', mode: fs.statSync(file).mode & 0o777 });
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (_) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    return false;
+  }
+}
+
+module.exports = { read, write, clear, keyFile, cacheDir, clearNeedsAuth, needsAuthFile };

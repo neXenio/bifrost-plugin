@@ -25,6 +25,23 @@ on.
   it opens Chrome when installed, the default browser otherwise.
 - New options: `auto_login` (boolean, default false) and `keyapp_url` (defaults to the
   gateway's own host when auto-login is on). `BIFROST_AUTO_LOGIN=1` also turns it on.
+- After the key is cached, the sign-in worker deletes this plugin's entry from
+  `~/.claude/mcp-needs-auth-cache.json`. Claude Code records the first 401 there and
+  skips the server for 15 minutes, so without this a restart right after sign-in
+  came up without bifrost tools. Every message now says: restart Claude Code, or run
+  `/mcp`, pick bifrost and choose Reconnect (not Authenticate).
+- A 401 for the cached key (rotated or revoked in the key page) drops the cache and
+  the cooldown marker, so the next startup signs in again. Network errors and 5xx
+  never do. Manual reset: `rm ~/.cache/bifrost-plugin/vk`.
+- One identity per machine: a saved `virtual_key` for the same gateway removes the
+  cached key, and a `BIFROST_URL`/`BIFROST_VK` pair replaces it.
+- The sign-in worker waits 5 minutes instead of 90 seconds. A timed-out attempt
+  retries after 30 minutes instead of 6 hours.
+- The browser notice ("Opening your browser for Bifrost sign-in") and the cooldown
+  only happen once the keyapp is known to be configured and https. Cowork and remote
+  sessions (`CLAUDE_CODE_IS_COWORK`, `CLAUDE_CODE_REMOTE`, a `remote*` entrypoint)
+  never start a sign-in. The in-flight lock can no longer be taken over or released
+  by a second session.
 - **Removed: the `oauth` block in `.mcp.json` and the `oauth_client_id` option.**
   Claude Code 2.1.293 never substitutes `${user_config.*}` inside `oauth`, even when
   the option is saved, so Keycloak always received the literal placeholder as

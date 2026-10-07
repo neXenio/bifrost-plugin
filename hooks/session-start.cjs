@@ -46,6 +46,8 @@ const { spawn } = require('child_process');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 const usage = require('./usage.cjs');
+const keyCache = require('./lib/key-cache.cjs');
+const setup = require('./auto-setup.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -689,8 +691,9 @@ function emitStaleNotice(file, cache, disc, signingIn) {
   if (!url || !vk) {
     if (signingIn) {
       process.stdout.write(
-        '\n🔑 Bifrost: a browser window opened for company sign-in. Once it says ' +
-        'connected, run `/mcp` and reconnect bifrost, or restart Claude Code.\n'
+        '\n🔑 Opening your browser for Bifrost sign-in. Once the page says connected, ' +
+        'restart Claude Code, or in this session run `/mcp`, pick bifrost and choose ' +
+        'Reconnect (not Authenticate).\n'
       );
       return;
     }
@@ -781,8 +784,9 @@ function spawnRefresh(file) {
 // signal counts as headless, and CI being set does too. The positive signal is
 // deliberately NOT `entrypoint === 'cli'`: Claude Desktop is interactive and reports
 // its own entrypoint.
+// The lock goes stale only after the worker's own 5 min timeout could have fired.
 const AUTO_LOGIN_COOLDOWN_MS = 6 * 60 * 60 * 1000;
-const AUTO_LOGIN_LOCK_STALE_MS = 2 * 60 * 1000;
+const AUTO_LOGIN_LOCK_STALE_MS = 6 * 60 * 1000;
 const AUTO_LOGIN_ATTEMPT = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login-attempt.json');
 const AUTO_LOGIN_LOCK = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login.lock');
 
@@ -800,26 +804,63 @@ function isHeadless(env = process.env) {
   return false;
 }
 
-// Returns 'go' or the reason not to. `lastAttemptAt` / `lockAt` are epoch ms or null.
-function autoLoginDecision({ enabled, hasKey, headless, source, lastAttemptAt, lockAt, now = Date.now() }) {
+// Cowork and remote sessions run in a sandbox that cannot open the user's browser or
+// receive a loopback callback. The variable names come from the 2.1.293 binary.
+function isRemote(env = process.env) {
+  const set = (v) => !!(v || '').trim() && !/^(0|false)$/i.test((v || '').trim());
+  return set(env.CLAUDE_CODE_IS_COWORK) || set(env.CLAUDE_CODE_REMOTE) ||
+    /^remote/i.test(env.CLAUDE_CODE_ENTRYPOINT || '');
+}
+
+// Returns 'go' or the reason not to. `lastAttemptAt` / `lockAt` are epoch ms or null;
+// `cooldownMs` is the attempt's own cooldown (a timed-out attempt records a shorter one).
+function autoLoginDecision({ enabled, hasKey, headless, remote, source, lastAttemptAt, cooldownMs, lockAt, now = Date.now() }) {
   if (!enabled) return 'disabled';
   if (hasKey) return 'has-key';
   if (headless) return 'headless';
+  if (remote) return 'remote';
   if (source !== 'startup') return 'not-startup';
-  if (Number.isFinite(lastAttemptAt) && now - lastAttemptAt < AUTO_LOGIN_COOLDOWN_MS) return 'cooldown';
+  const cooldown = Number.isFinite(cooldownMs) ? cooldownMs : AUTO_LOGIN_COOLDOWN_MS;
+  if (Number.isFinite(lastAttemptAt) && now - lastAttemptAt < cooldown) return 'cooldown';
   if (Number.isFinite(lockAt) && now - lockAt < AUTO_LOGIN_LOCK_STALE_MS) return 'in-flight';
   return 'go';
 }
 
 // Null when the file is absent. A file that exists but does not parse reads as epoch 0,
 // i.e. long expired, so a torn write can never wedge the lock shut.
-function readAt(file) {
+function readMarker(file) {
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch (_) { return null; }
   try {
-    const at = JSON.parse(raw).at;
-    return Number.isFinite(at) ? at : 0;
-  } catch (_) { return 0; }
+    const m = JSON.parse(raw);
+    return { ...m, at: Number.isFinite(m.at) ? m.at : 0 };
+  } catch (_) { return { at: 0 }; }
+}
+
+function readAt(file) {
+  const m = readMarker(file);
+  return m ? m.at : null;
+}
+
+// Take the in-flight lock. O_EXCL create, so two sessions cannot both win. A stale lock
+// (worker killed) is first renamed to a name only this process uses, which only one
+// contender can do; if what was renamed turns out to be a fresh lock (another session
+// replaced the stale one in between), it is put back and this session backs off.
+function takeLock(lockAt, token, now) {
+  if (lockAt !== null) {
+    const mine = `${AUTO_LOGIN_LOCK}.${process.pid}.${now}`;
+    try { fs.renameSync(AUTO_LOGIN_LOCK, mine); } catch (_) { return false; }
+    if (readAt(mine) !== lockAt) {
+      try { fs.linkSync(mine, AUTO_LOGIN_LOCK); } catch (_) {}
+      try { fs.unlinkSync(mine); } catch (_) {}
+      return false;
+    }
+    try { fs.unlinkSync(mine); } catch (_) {}
+  }
+  try {
+    fs.writeFileSync(AUTO_LOGIN_LOCK, JSON.stringify({ pid: process.pid, at: now, token }), { flag: 'wx' });
+    return true;
+  } catch (_) { return false; }
 }
 
 // Decide, take the lock, record the attempt, spawn. True only when a browser is on its
@@ -829,30 +870,65 @@ function readAt(file) {
 function maybeStartAutoLogin(input) {
   const now = Date.now();
   const lockAt = readAt(AUTO_LOGIN_LOCK);
+  const attempt = readMarker(AUTO_LOGIN_ATTEMPT);
   const decision = autoLoginDecision({
     enabled: autoLoginEnabled(),
     hasKey: !!gw.env().vk,
     headless: isHeadless(),
+    remote: isRemote(),
     source: input && input.source,
-    lastAttemptAt: readAt(AUTO_LOGIN_ATTEMPT),
+    lastAttemptAt: attempt ? attempt.at : null,
+    cooldownMs: attempt ? attempt.cooldownMs : undefined,
     lockAt,
     now,
   });
   if (decision !== 'go') return false;
+  // The worker's own refusals, checked here first: an unconfigured or non-https keyapp
+  // must neither announce a browser nor burn the cooldown.
+  const gateway = setup.gatewayUrl();
+  const base = setup.keyappBase(gateway);
+  if (!gateway || !base || !setup.isSafeKeyapp(base)) return false;
   try {
     fs.mkdirSync(path.dirname(AUTO_LOGIN_LOCK), { recursive: true });
-    if (lockAt !== null) { try { fs.unlinkSync(AUTO_LOGIN_LOCK); } catch (_) {} } // stale
-    fs.writeFileSync(AUTO_LOGIN_LOCK, JSON.stringify({ pid: process.pid, at: now }), { flag: 'wx' });
+    const token = crypto.randomBytes(8).toString('hex');
+    if (!takeLock(lockAt, token, now)) return false;
     fs.writeFileSync(AUTO_LOGIN_ATTEMPT, JSON.stringify({ at: now }), 'utf8');
     spawn(
       process.execPath,
       [path.join(__dirname, 'auto-setup.cjs')],
-      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
+      { detached: true, stdio: 'ignore', env: { ...process.env, BIFROST_AUTO_LOGIN_LOCK_TOKEN: token }, windowsHide: true }
     ).unref();
     return true;
   } catch (_) {
     return false;
   }
+}
+
+// One identity per machine. The MCP connection prefers the cached key (headersHelper
+// output overrides the static header), the hooks prefer an explicit one, so with both
+// present they would silently act as two different users. A saved `virtual_key` is a
+// deliberate choice and wins: the cache goes. A BIFROST_URL/BIFROST_VK pair cannot
+// reach the plugin's static header, so dropping the cache would leave the MCP
+// connection with no key at all; the cache takes the env key instead.
+function cacheConflict({ cached, gateway, optVk, envUrl, envVk }) {
+  if (!cached) return 'keep';
+  if (optVk && gw.sameEndpoint(cached.url, gateway)) return 'clear';
+  if (envUrl && envVk && gw.sameEndpoint(cached.url, envUrl) && cached.vk !== envVk) return 'replace';
+  return 'keep';
+}
+
+function reconcileKeyCache(env = process.env) {
+  const cached = keyCache.read();
+  const envVk = (env.BIFROST_VK || '').trim();
+  const action = cacheConflict({
+    cached,
+    gateway: gw.pluginOption('gateway_url', env),
+    optVk: (env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY || '').trim(),
+    envUrl: (env.BIFROST_URL || '').trim(),
+    envVk,
+  });
+  if (action === 'clear') keyCache.clear();
+  else if (action === 'replace') keyCache.write(cached.url, envVk);
 }
 
 function readStdin(ms) {
@@ -895,6 +971,7 @@ function main() {
 function run(input) {
   try {
     let signingIn = false;
+    try { reconcileKeyCache(); } catch (_) {}
     if (input) { try { signingIn = maybeStartAutoLogin(input); } catch (_) {} }
     emitEndpointMigrationNotice();
     emitContext();
@@ -938,4 +1015,4 @@ function run(input) {
 if (require.main === module) main();
 
 // Exported so tests drive the real implementation rather than a copy of it.
-module.exports = { cacheFile, safeUrl, projectQuery, autoLoginDecision, autoLoginEnabled, isHeadless };
+module.exports = { cacheFile, safeUrl, projectQuery, autoLoginDecision, autoLoginEnabled, isHeadless, isRemote, cacheConflict };

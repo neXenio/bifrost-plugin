@@ -137,6 +137,12 @@ function pluginOption(key, envVars = process.env) {
   return manifestDefaults[key] || '';
 }
 
+// This plugin's own name from plugin.json — Claude Code keys the plugin's MCP server as
+// `plugin:<name>:bifrost`, and a mirror may rename the plugin.
+function pluginName() {
+  try { return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8')).name || ''; } catch (_) { return ''; }
+}
+
 // A gateway URL and the key that authenticates to it are ONE credential. Resolving
 // them independently would let a stale `export BIFROST_URL=…` in a shell profile pair
 // with the key from ~/.claude.json and send that key to a host it was never issued
@@ -208,6 +214,7 @@ function rpc(method, params, timeoutMs) {
         },
       },
       (resp) => {
+        if (resp.statusCode === 401) forgetCachedKey(url, vk);
         let d = '';
         resp.on('data', (c) => (d += c));
         resp.on('end', () => resolve({ status: resp.statusCode, body: d }));
@@ -218,6 +225,18 @@ function rpc(method, params, timeoutMs) {
     req.write(payload);
     req.end();
   });
+}
+
+// A 401 with the key auto-login cached means that key is dead (rotated or revoked in
+// the key page). Drop it, and the cooldown marker with it, so the next startup signs in
+// again instead of sending the dead key forever. Only a 401 counts: a network error or
+// a 5xx says nothing about the key. A key from any other source is the user's own
+// configuration and is never touched.
+function forgetCachedKey(url, vk) {
+  const cached = keyCache.read();
+  if (!cached || cached.vk !== vk || !sameEndpoint(cached.url, url)) return;
+  keyCache.clear();
+  try { fs.unlinkSync(path.join(keyCache.cacheDir(), 'auto-login-attempt.json')); } catch (_) {}
 }
 
 // Responses may be a single JSON object or an SSE stream of `data:` lines.
@@ -527,6 +546,8 @@ function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
 module.exports = {
   env,
   pluginOption,
+  pluginName,
+  rpc,
   isIdentifier,
   getCapabilities,
   callCapability,

@@ -63,8 +63,8 @@ claude mcp remove --scope user bifrost
 
 Desktop has no shell, so `${BIFROST_URL}` and `${BIFROST_VK}` never resolve
 there, and it does not read this project's `.mcp.json`. The supported path is
-installing the plugin itself, which prompts for the gateway URL, virtual key,
-and OAuth client ID at install time and stores them as plugin config. The
+installing the plugin itself, which prompts for the gateway URL, virtual key
+and auto-login at install time and stores them as plugin config. The
 bundled `.mcp.json` reads those back as `${user_config.gateway_url}` and so on.
 
 ### Install the plugin (preferred)

@@ -190,9 +190,39 @@ test('gate: 6h cooldown after an attempt, then it may retry', () => {
   assert.strictEqual(ss.autoLoginDecision({ ...GO, lastAttemptAt: GO.now - 7 * h }), 'go');
 });
 
-test('gate: a live lock blocks, a lock older than 2 min is stale', () => {
+test('gate: a live lock blocks, a lock older than 6 min (past the 5 min worker timeout) is stale', () => {
   assert.strictEqual(ss.autoLoginDecision({ ...GO, lockAt: GO.now - 30 * 1000 }), 'in-flight');
-  assert.strictEqual(ss.autoLoginDecision({ ...GO, lockAt: GO.now - 3 * 60 * 1000 }), 'go');
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, lockAt: GO.now - 5 * 60 * 1000 }), 'in-flight');
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, lockAt: GO.now - 7 * 60 * 1000 }), 'go');
+});
+
+test('gate: a timed-out attempt records its own 30 min cooldown', () => {
+  const m = 60 * 1000;
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, lastAttemptAt: GO.now - 20 * m, cooldownMs: 30 * m }), 'cooldown');
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, lastAttemptAt: GO.now - 31 * m, cooldownMs: 30 * m }), 'go');
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, lastAttemptAt: GO.now - 31 * m }), 'cooldown', 'default stays 6 h');
+});
+
+test('gate: Cowork and remote sessions never open a browser', () => {
+  assert.strictEqual(ss.autoLoginDecision({ ...GO, remote: true }), 'remote');
+  assert.strictEqual(ss.isRemote({ CLAUDE_CODE_IS_COWORK: '1' }), true);
+  assert.strictEqual(ss.isRemote({ CLAUDE_CODE_REMOTE: 'true' }), true);
+  assert.strictEqual(ss.isRemote({ CLAUDE_CODE_ENTRYPOINT: 'remote_cowork' }), true);
+  assert.strictEqual(ss.isRemote({ CLAUDE_CODE_ENTRYPOINT: 'remote' }), true);
+  for (const env of [{}, { CLAUDE_CODE_IS_COWORK: '0' }, { CLAUDE_CODE_REMOTE: 'false' }, { CLAUDE_CODE_IS_COWORK: ' ' },
+    { CLAUDE_CODE_ENTRYPOINT: 'cli' }, { CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }]) {
+    assert.strictEqual(ss.isRemote(env), false, JSON.stringify(env));
+  }
+});
+
+test('one identity: a saved virtual_key clears the cache, an env pair replaces it, otherwise keep', () => {
+  const cached = { url: GW, vk: 'vk_cache', at: 1 };
+  assert.strictEqual(ss.cacheConflict({ cached, gateway: `${GW}/`, optVk: 'vk_opt' }), 'clear');
+  assert.strictEqual(ss.cacheConflict({ cached, gateway: 'https://other.test/mcp', optVk: 'vk_opt' }), 'keep');
+  assert.strictEqual(ss.cacheConflict({ cached, gateway: GW, envUrl: GW, envVk: 'vk_env' }), 'replace');
+  assert.strictEqual(ss.cacheConflict({ cached, gateway: GW, envUrl: GW, envVk: 'vk_cache' }), 'keep');
+  assert.strictEqual(ss.cacheConflict({ cached, gateway: GW, envVk: 'vk_env' }), 'keep', 'a lone BIFROST_VK is ignored by env() too');
+  assert.strictEqual(ss.cacheConflict({ cached: null, gateway: GW, optVk: 'vk_opt' }), 'keep');
 });
 
 test('pluginOption: saved value wins, else the manifest default, empty counts as unset', () => {
@@ -220,21 +250,29 @@ test('headless: observed -p signals and CI count, interactive and Desktop do not
 });
 
 // ---------------------------------------------------------------------------
-// session-start end to end. BIFROST_URL is a plain-http, non-loopback host, so the
-// keyapp derived from it is refused as insecure: the spawned worker exits without
-// opening a browser during the test run.
+// session-start end to end. The browser opener (`open` / `xdg-open`) is replaced by a
+// shim on PATH that only logs its arguments, and the keyapp is an https host that does
+// not exist, so nothing real is ever opened or contacted.
 // ---------------------------------------------------------------------------
+
+const SHIM = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-shim-'));
+const SHIM_LOG = path.join(SHIM, 'open.log');
+for (const bin of ['open', 'xdg-open']) {
+  fs.writeFileSync(path.join(SHIM, bin), `#!/bin/sh\necho "$@" >> "${SHIM_LOG}"\n`, { mode: 0o755 });
+}
 
 function runSessionStart(env, home, input) {
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
     env: {
-      PATH: process.env.PATH,
+      PATH: `${SHIM}${path.delimiter}${process.env.PATH}`,
       HOME: home,
       BIFROST_REFRESH: '0',
       CLAUDE_PROJECT_DIR: home,
       CLAUDE_CODE_ENTRYPOINT: 'cli',
       CLAUDE_CODE_SESSION_ATTENDED: '1',
-      BIFROST_URL: 'http://no-browser.example.test/mcp',
+      BIFROST_URL: 'https://no-browser.example.invalid/mcp',
+      BIFROST_KEYAPP_URL: 'https://keyapp.example.invalid',
+      BIFROST_SETUP_TIMEOUT_MS: '1500',
       ...env,
     },
     input: JSON.stringify(input || { hook_event_name: 'SessionStart', source: 'startup' }),
@@ -243,15 +281,17 @@ function runSessionStart(env, home, input) {
   });
 }
 
-const NOTICE = /browser window opened for company sign-in/;
+const NOTICE = /Opening your browser for Bifrost sign-in/;
+const attemptFile = (home) => path.join(home, '.cache', 'bifrost-plugin', 'auto-login-attempt.json');
 
 test('session-start: enabled + no key + interactive startup → one sign-in notice, attempt recorded', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
   const r = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, NOTICE);
+  assert.match(r.stdout, /choose Reconnect \(not Authenticate\)/);
   assert.doesNotMatch(r.stdout, /Run `\/bifrost-setup` to fix/);
-  assert.ok(fs.existsSync(path.join(home, '.cache', 'bifrost-plugin', 'auto-login-attempt.json')));
+  assert.ok(fs.existsSync(attemptFile(home)));
 
   // Second start inside the cooldown: back to the ordinary not-configured line.
   const again = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, home);
@@ -259,18 +299,35 @@ test('session-start: enabled + no key + interactive startup → one sign-in noti
   assert.match(again.stdout, /Run `\/bifrost-setup` to fix/);
 });
 
-test('session-start: headless, /clear, or disabled never trigger', () => {
+test('session-start: headless, /clear, Cowork, remote or disabled never trigger', () => {
   for (const [env, input] of [
     [{ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', CLAUDE_CODE_SESSION_ATTENDED: '0', CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' }],
     [{ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', CI: '1' }],
     [{ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true' }, { source: 'clear' }],
+    [{ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', CLAUDE_CODE_IS_COWORK: '1' }],
+    [{ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', CLAUDE_CODE_ENTRYPOINT: 'remote_cowork' }],
     [{}],
   ]) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
     const r = runSessionStart(env, home, input);
     assert.strictEqual(r.status, 0);
     assert.doesNotMatch(r.stdout, NOTICE);
-    assert.ok(!fs.existsSync(path.join(home, '.cache', 'bifrost-plugin', 'auto-login-attempt.json')));
+    assert.ok(!fs.existsSync(attemptFile(home)));
+  }
+});
+
+test('session-start: an http or missing keyapp neither announces a browser nor burns the cooldown', () => {
+  for (const env of [
+    { CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_KEYAPP_URL: 'http://keyapp.example.invalid' },
+    { CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_KEYAPP_URL: '', BIFROST_URL: 'http://no-browser.example.invalid/mcp' },
+  ]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
+    const r = runSessionStart(env, home);
+    assert.strictEqual(r.status, 0);
+    assert.doesNotMatch(r.stdout, NOTICE);
+    assert.match(r.stdout, /Run `\/bifrost-setup` to fix/);
+    assert.ok(!fs.existsSync(attemptFile(home)));
+    assert.ok(!fs.existsSync(path.join(home, '.cache', 'bifrost-plugin', 'auto-login.lock')));
   }
 });
 
@@ -282,4 +339,134 @@ test('session-start: with a key configured, output is identical whether auto-log
   assert.strictEqual(on.stdout, off.stdout);
   assert.doesNotMatch(on.stdout, NOTICE);
   assert.doesNotMatch(on.stdout, /vk_present/);
+});
+
+test('session-start: a saved virtual_key removes a cached key for the same gateway', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
+  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'vk'), JSON.stringify({ url: GW, vk: 'vk_cached', at: 1 }));
+  const r = runSessionStart({ BIFROST_URL: '', CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'vk_saved' }, home);
+  assert.strictEqual(r.status, 0);
+  assert.ok(!fs.existsSync(path.join(dir, 'vk')));
+});
+
+// ---------------------------------------------------------------------------
+// auto-setup.cjs worker: callback success clears the needs-auth record (D1), a timeout
+// records the short cooldown (D5).
+// ---------------------------------------------------------------------------
+
+function startWorker(home, env) {
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [path.join(ROOT, 'hooks', 'auto-setup.cjs')], {
+    env: {
+      PATH: `${SHIM}${path.delimiter}${process.env.PATH}`,
+      HOME: home,
+      CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+      BIFROST_URL: GW,
+      BIFROST_KEYAPP_URL: 'https://keyapp.example.invalid',
+      ...env,
+    },
+    stdio: 'ignore',
+  });
+  return new Promise((resolve) => child.on('exit', resolve));
+}
+
+async function waitFor(fn, ms = 5000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = fn();
+    if (v || Date.now() > end) return v;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+test('worker: a successful sign-in caches the key and drops only this plugin\'s needs-auth entry', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-worker-'));
+  const cfgDir = path.join(home, '.claude');
+  fs.mkdirSync(cfgDir, { recursive: true });
+  const name = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).name;
+  const needsAuth = path.join(cfgDir, 'mcp-needs-auth-cache.json');
+  fs.writeFileSync(needsAuth, JSON.stringify({ [`plugin:${name}:bifrost`]: { timestamp: 1 }, 'plugin:other:x': { timestamp: 2 } }));
+  try { fs.unlinkSync(SHIM_LOG); } catch (_) {}
+
+  const exited = startWorker(home, { BIFROST_SETUP_TIMEOUT_MS: '8000' });
+  const line = await waitFor(() => { try { return fs.readFileSync(SHIM_LOG, 'utf8'); } catch (_) { return ''; } });
+  const cb = new URL(decodeURIComponent(line.match(/cb=([^\s]+)/)[1]));
+  cb.searchParams.set('vk', 'vk_from_signin');
+  const status = await new Promise((resolve) => require('http').get(cb, (res) => { res.resume(); resolve(res.statusCode); }));
+  await exited;
+
+  assert.strictEqual(status, 200);
+  const cached = JSON.parse(fs.readFileSync(path.join(home, '.cache', 'bifrost-plugin', 'vk'), 'utf8'));
+  assert.strictEqual(cached.vk, 'vk_from_signin');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(needsAuth, 'utf8')), { 'plugin:other:x': { timestamp: 2 } });
+});
+
+test('worker: a timeout shortens the cooldown of an automatic attempt to 30 min', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-worker-'));
+  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'auto-login-attempt.json'), JSON.stringify({ at: 1 }));
+  await startWorker(home, { BIFROST_SETUP_TIMEOUT_MS: '300' });
+  const m = JSON.parse(fs.readFileSync(path.join(dir, 'auto-login-attempt.json'), 'utf8'));
+  assert.strictEqual(m.cooldownMs, 30 * 60 * 1000);
+  assert.ok(m.at > 1);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'auto-setup-result.json'), 'utf8')).reason, 'timeout');
+});
+
+test('needs-auth: clearNeedsAuth keeps other entries and is a no-op without the file or entry', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-na-'));
+  withEnv({ CLAUDE_CONFIG_DIR: dir }, () => {
+    assert.strictEqual(keyCache.clearNeedsAuth('plugin:p:bifrost'), false);
+    fs.writeFileSync(keyCache.needsAuthFile(), JSON.stringify({ a: { timestamp: 1 } }));
+    assert.strictEqual(keyCache.clearNeedsAuth('plugin:p:bifrost'), false);
+    fs.writeFileSync(keyCache.needsAuthFile(), '{"a":');
+    assert.strictEqual(keyCache.clearNeedsAuth('plugin:p:bifrost'), false);
+    assert.strictEqual(fs.readFileSync(keyCache.needsAuthFile(), 'utf8'), '{"a":');
+    assert.deepStrictEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D3: a 401 for the cached key forgets it; nothing else does.
+// ---------------------------------------------------------------------------
+
+function fakeGateway(status) {
+  const http = require('http');
+  const server = http.createServer((req, res) => { req.resume(); res.writeHead(status); res.end('{}'); });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('rpc: a 401 with the cached key clears the cache and the cooldown marker', async () => {
+  const server = await fakeGateway(401);
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+  keyCache.write(url, 'vk_revoked');
+  fs.writeFileSync(path.join(keyCache.cacheDir(), 'auto-login-attempt.json'), JSON.stringify({ at: Date.now() }));
+  await withEnv({ CLAUDE_PLUGIN_OPTION_GATEWAY_URL: url }, () => gw.rpc('initialize', {}, 2000));
+  server.close();
+  assert.strictEqual(keyCache.read(), null);
+  assert.ok(!fs.existsSync(path.join(keyCache.cacheDir(), 'auto-login-attempt.json')));
+});
+
+test('rpc: a 5xx or a network error keeps the cached key', async () => {
+  const server = await fakeGateway(503);
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+  keyCache.write(url, 'vk_kept');
+  await withEnv({ CLAUDE_PLUGIN_OPTION_GATEWAY_URL: url }, () => gw.rpc('initialize', {}, 2000));
+  server.close();
+  assert.strictEqual(keyCache.read().vk, 'vk_kept');
+  await withEnv({ CLAUDE_PLUGIN_OPTION_GATEWAY_URL: url }, () => gw.rpc('initialize', {}, 2000));
+  assert.strictEqual(keyCache.read().vk, 'vk_kept', 'connection refused must not clear the key');
+  keyCache.clear();
+});
+
+test('rpc: a 401 for a key from another source leaves the cache alone', async () => {
+  const server = await fakeGateway(401);
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+  keyCache.write(url, 'vk_cached');
+  await withEnv({ BIFROST_URL: url, BIFROST_VK: 'vk_env' }, () => gw.rpc('initialize', {}, 2000));
+  server.close();
+  assert.strictEqual(keyCache.read().vk, 'vk_cached');
+  keyCache.clear();
 });

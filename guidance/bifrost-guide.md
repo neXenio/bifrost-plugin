@@ -130,7 +130,7 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 | 401 / 403 from bifrost | `BIFROST_VK` missing or wrong | Re-run setup or set `export BIFROST_VK=vk_<your-key>` |
 | No skills found | bifrost MCP not loaded, or no skill server | Check `claude mcp get bifrost` / `/mcp`; run `/bifrost-mcp-setup` |
 | Hook not firing | Plugin not installed/enabled | Re-install / re-enable via `/plugin`; restart CC (hooks ship inside the plugin, not `settings.json`) |
-| Desktop: OAuth fails before login (`Incompatible auth server` or `Trusted Hosts` errors) | Gateway or identity provider does not support Claude self-registering as an OAuth client | Use a virtual key, or ask your operator for an OAuth client ID; `/bifrost-debug` step 9 |
+| Desktop: OAuth fails before login (`Incompatible auth server` or `Trusted Hosts` errors) | Gateway or identity provider does not support Claude self-registering as an OAuth client | Use a virtual key or `auto_login`; `/bifrost-debug` step 9 |
 | Desktop: `no_virtual_key` after a successful login | Identity not yet in the gateway's VK map | Ask the gateway operator to map your email to a virtual key |
 
 ## Gateway routing reference

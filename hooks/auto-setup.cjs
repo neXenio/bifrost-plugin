@@ -17,7 +17,7 @@
 //   4. Write a result marker (ok/reason only, never the key) so a failure can be
 //      diagnosed. Never throws; always exits 0.
 //
-// Guardrails: listener is loopback-only + nonce-gated + single-use + times out (90s),
+// Guardrails: listener is loopback-only + nonce-gated + single-use + times out (5 min),
 // so nothing else on the machine can drive it or exfiltrate the key. The keyapp must
 // be https (loopback excepted for local dev), since the page it serves hands out keys.
 //
@@ -34,9 +34,13 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const keyCache = require('./lib/key-cache.cjs');
-const { pluginOption } = require('./lib/gateway.cjs');
+const { pluginOption, pluginName } = require('./lib/gateway.cjs');
 
-const TIMEOUT_MS = parseInt(process.env.BIFROST_SETUP_TIMEOUT_MS || '90000', 10);
+// A first sign-in (password, 2FA, consent) easily outlasts 90 s, so 5 min.
+const TIMEOUT_MS = parseInt(process.env.BIFROST_SETUP_TIMEOUT_MS || '300000', 10);
+// After a timeout (tab closed, login abandoned) the next startup may retry sooner than
+// the normal 6 h cooldown in session-start.cjs.
+const TIMEOUT_COOLDOWN_MS = 30 * 60 * 1000;
 
 const STATE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const RESULT_MARKER = path.join(STATE_DIR, 'auto-setup-result.json');
@@ -132,12 +136,16 @@ function main() {
       if (done) { res.writeHead(200); return res.end(); }
       done = true;
       const ok = keyCache.write(gateway, vk);
-      if (ok) { try { fs.unlinkSync(ATTEMPT_MARKER); } catch (_) {} }
+      if (ok) {
+        try { fs.unlinkSync(ATTEMPT_MARKER); } catch (_) {}
+        keyCache.clearNeedsAuth(`plugin:${pluginName()}:bifrost`);
+      }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end('<!doctype html><meta charset="utf-8"><title>Bifrost</title>' +
         '<body style="font:15px -apple-system,sans-serif;max-width:420px;margin:14vh auto;text-align:center">' +
-        (ok ? '<h2>✓ Bifrost connected</h2><p>You can close this tab. In Claude Code, run ' +
-              '<code>/mcp</code> and reconnect <b>bifrost</b>, or restart Claude Code.</p>'
+        (ok ? '<h2>✓ Bifrost connected</h2><p>You can close this tab. Restart Claude Code, or in ' +
+              'a running session run <code>/mcp</code>, pick <b>bifrost</b> and choose ' +
+              '<b>Reconnect</b> (not Authenticate).</p>'
             : '<h2>Key received</h2><p>Could not save it on this machine. Run <code>/bifrost-setup</code>.</p>') +
         '</body>');
       writeResult(ok ? { ok: true, how: 'key-cache' } : { ok: false, reason: 'persist-failed' });
@@ -155,7 +163,13 @@ function main() {
   }
 
   const timer = setTimeout(() => {
-    if (!done) writeResult({ ok: false, reason: 'timeout' });
+    if (!done) {
+      writeResult({ ok: false, reason: 'timeout' });
+      // Only an automatic attempt has a cooldown marker to shorten.
+      if (fs.existsSync(ATTEMPT_MARKER)) {
+        try { fs.writeFileSync(ATTEMPT_MARKER, JSON.stringify({ at: Date.now(), cooldownMs: TIMEOUT_COOLDOWN_MS }), 'utf8'); } catch (_) {}
+      }
+    }
     cleanup();
   }, TIMEOUT_MS);
 
@@ -167,11 +181,20 @@ function main() {
   });
 }
 
-// Release the in-flight lock session-start.cjs took before spawning us. Harmless when
-// run from /bifrost-setup, where no lock exists.
+// Release the in-flight lock session-start.cjs took before spawning us, and only that
+// one: it passes the lock's token, so a /bifrost-setup run (no token) or a worker whose
+// lock was taken over never deletes a lock another session holds.
 function finish() {
-  try { fs.unlinkSync(LOCK_FILE); } catch (_) {}
+  const token = process.env.BIFROST_AUTO_LOGIN_LOCK_TOKEN;
+  try {
+    if (token && JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')).token === token) fs.unlinkSync(LOCK_FILE);
+  } catch (_) {}
   process.exit(0);
 }
 
-try { main(); } catch (_) { writeResult({ ok: false, reason: 'fatal' }); finish(); }
+if (require.main === module) {
+  try { main(); } catch (_) { writeResult({ ok: false, reason: 'fatal' }); finish(); }
+}
+
+// session-start.cjs runs the same checks before it announces a sign-in.
+module.exports = { gatewayUrl, keyappBase, isSafeKeyapp };
