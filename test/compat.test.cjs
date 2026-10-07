@@ -249,7 +249,9 @@ function injectCacheName(projDir) {
   return `inject-${label}-${digest}.json`;
 }
 
-test('old (pre-1.1.0) plain-string cache facts still render', () => {
+// Pre-v2 caches were filled by the generic directory query, before injection-time
+// exclusion existed, so their facts must never render, even with priming on.
+test('pre-v2 cache facts are never rendered, even with priming on', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const cacheDir = path.join(home, '.cache', 'bifrost-plugin');
@@ -259,10 +261,10 @@ test('old (pre-1.1.0) plain-string cache facts still render', () => {
     JSON.stringify({ at: Date.now(), memory: { facts: ['legacy plain-string fact'] } })
   );
   const r = runHook('session-start.cjs', {
-    CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '',
+    CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '', BIFROST_MEMORY_PRIME: '1',
   }, home);
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /legacy plain-string fact/);
+  assert.doesNotMatch(r.stdout, /legacy plain-string fact/);
 });
 
 test('BIFROST_MEMORY_INJECT=0 still suppresses the memory header', () => {
