@@ -10,15 +10,16 @@ the tools, skill library, and memory your gateway exposes.
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
-> **Auth modes:** every surface authenticates with the virtual-key header above.
+> **Auth modes:** the plugin's server authenticates with the virtual-key header above.
 > The plugin collects the gateway URL and the key as install-time plugin config,
 > so Claude Desktop and claude.ai work without any shell environment. `BIFROST_URL`
 > and `BIFROST_VK` still override it for the hook layer.
 >
-> Signing in with a company account instead of a key is not available yet. The
-> gateway offers the OAuth challenge, but its authorization server does not permit
-> client registration from a desktop client, so the flow cannot complete. Use a
-> virtual key until that changes.
+> Without a key, two company sign-ins exist. In the Claude Code CLI and Desktop's
+> Code tab, the plugin's opt-in auto-login opens the company sign-in page once and
+> caches the key it gets back. In Desktop's Chat tab, claude.ai web and Cowork, the
+> org connector "luca Bifrost" signs in through company SSO; its tools are named
+> `mcp__claude_ai_luca_Bifrost__…`.
 >
 > **Surfaces:** hooks and subagents run in the Claude Code CLI and in Claude
 > Desktop's Code and Cowork tabs. They do not run in Desktop's Chat tab or in

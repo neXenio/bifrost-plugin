@@ -56,9 +56,9 @@ Run these checks to confirm everything is live:
 
 1. **MCP loaded:** type `/mcp` — `bifrost` should appear in the server list.
 2. **Skill search works:** if your gateway exposes a skill server, call
-   `mcp__bifrost__<skills-server>-skill_search` with `"test connection"` — should return results.
+   `<prefix><skills-server>-skill_search` with `"test connection"` (`<prefix>` is `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server) — should return results.
 3. **Memory tools:** if your gateway exposes a memory server, call its search tool
-   (`mcp__bifrost__<memory-server>-search`) with a short query — should return results or an empty list.
+   (`<prefix><memory-server>-search`) with a short query — should return results or an empty list.
 4. **Session context:** open a new session — the bifrost context block should appear at the top.
 
 ## Step 5 — Add the skill-discovery MUST-stanza (recommended)

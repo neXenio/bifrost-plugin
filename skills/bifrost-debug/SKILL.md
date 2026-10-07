@@ -49,10 +49,10 @@ Expected: 200 or 405 (OPTIONS probe). 401 → bad VK. Timeout / connection refus
 
 ## 4. Check the gateway's memory MCP tools (for agent-driven memory)
 
-Run `/mcp` and look for a memory server under `bifrost`. If present, test it:
+Run `/mcp` and look for a memory server under `bifrost`. If present, test it (`<prefix>` is `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server):
 
 ```
-mcp__bifrost__<memory-server>-search("test connection")
+<prefix><memory-server>-search("test connection")
 ```
 
 If the tool is not found, the gateway exposes no memory server — memory calls will
@@ -85,7 +85,7 @@ If the plugin is missing or disabled: re-install / re-enable it via `/plugin`
 
 If your gateway exposes a skill server, inside Claude Code call:
 ```
-mcp__bifrost__<skills-server>-skill_search("test connection")
+<prefix><skills-server>-skill_search("test connection")
 ```
 
 - Returns results → MCP and skill routing are working.

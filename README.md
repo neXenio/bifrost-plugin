@@ -17,7 +17,7 @@ degrades gracefully — those features simply no-op.
 | Pillar | Behavior |
 |--------|----------|
 | 1 — Plugin Lifecycle Hooks | Auto-injects recalled memory context at session start, enforces skill-discovery hints before non-trivial tasks, spools memory candidates, and tracks capability usage |
-| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
+| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`<prefix><skills-server>-skill_search`, see Tool names below) before starting |
 | 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node scripts/install.js --key vk_…` (or `/bifrost-setup`) |
 | 4 — Agent-driven memory | Recalls context via gateway memory tools before non-trivial tasks and saves durable decisions after work |
 
@@ -395,7 +395,7 @@ and memory corpus, but hooks run only in the Claude Code CLI and in Desktop's Co
 and Cowork tabs. On Desktop's Chat tab and on claude.ai web, nothing is injected.
 Skill descriptions are loaded on every surface whether or not the skill is
 invoked, so that skill's description carries the parts that matter most —
-above all that a missing `mcp__bifrost__<server>-<tool>` usually means the
+above all that a missing `<prefix><server>-<tool>` usually means the
 capability is in code mode behind `executeToolCode`, not that it is absent.
 
 That is a partial substitute, not an equal one. A description can state the shape;
@@ -469,7 +469,7 @@ After install, enable, and restart:
 
 1. `/mcp` — `bifrost` should be connected; note tool prefixes (e.g. `skills-skill_search`).
 2. `/doctor` — no hook-load errors for `bifrost-plugin`.
-3. Call `mcp__bifrost__<skills-server>-skill_search` with a task description — should return matches.
+3. Call `<prefix><skills-server>-skill_search` with a task description — should return matches.
 4. Type **"bifrost debug"** or `/bifrost-debug` for the full decision tree.
 
 ---
@@ -507,11 +507,13 @@ Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` dia
 SessionStart      →  session-start.cjs  →  prints guidance/bifrost-context.md (~400 tokens)
 UserPromptSubmit  →  prompt-submit.cjs  →  skill-discovery hint for task-verb prompts
 
-.mcp.json (shipped)  →  bifrost MCP server  →  mcp__bifrost__<server>-<tool> (skills, memory, …)
+.mcp.json (shipped)  →  bifrost MCP server  →  <prefix><server>-<tool> (skills, memory, …)
 
-Memory: agent calls mcp__bifrost__<memory-server>-search before tasks,
-        mcp__bifrost__<memory-server>-store after significant work.
+Memory: agent calls <prefix><memory-server>-search before tasks,
+        <prefix><memory-server>-store after significant work.
 ```
+
+**Tool names.** `<prefix>` depends on how the gateway is connected: `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server (which hides the plugin's). The injected session context names the one that applies.
 
 All hooks silent-fail: any error exits 0 silently so they never block a prompt.
 Hooks write only to their own cache under `~/.cache/bifrost-plugin/` — they
