@@ -2,7 +2,7 @@
 
 All notable changes to bifrost-plugin are documented here.
 
-## 1.8.0 (2026-10-08)
+## [1.8.0] — 2026-10-08
 
 **Session-start fact priming is now off by default.** The header still prints the
 memory recall and store guidance, but no facts are injected and the refresh worker makes
