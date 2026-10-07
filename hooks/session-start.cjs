@@ -980,7 +980,7 @@ function exitWhenFlushed() {
 // synchronous path it always has, without touching stdin.
 function main() {
   let wantsInput = false;
-  try { wantsInput = autoLoginEnabled() && !isHeadless() && !gw.env().vk; } catch (_) {}
+  try { wantsInput = autoLoginEnabled() && !isHeadless() && !isRemote() && !gw.env().vk; } catch (_) {}
   if (!wantsInput) return run(null);
   readStdin(300).then((raw) => {
     let input = null;

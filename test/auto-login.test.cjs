@@ -151,6 +151,12 @@ test('env(): plugin option pair beats the cache', () => {
   keyCache.clear();
 });
 
+test('env(): a saved virtual_key alone pairs with the default gateway, like the static header', () => {
+  withEnv({ CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'vk_opt' }, () => {
+    assert.deepStrictEqual(gw.env(), { url: GW, vk: 'vk_opt' });
+  });
+});
+
 test('env(): cached key pairs with a lone gateway option only when it is the same endpoint', () => {
   keyCache.write(GW, 'vk_cache');
   withEnv({ CLAUDE_PLUGIN_OPTION_GATEWAY_URL: `${GW}/` }, () => {
@@ -349,6 +355,8 @@ test('session-start: a saved virtual_key removes a cached key for the same gatew
   const r = runSessionStart({ BIFROST_URL: '', CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY: 'vk_saved' }, home);
   assert.strictEqual(r.status, 0);
   assert.ok(!fs.existsSync(path.join(dir, 'vk')));
+  assert.doesNotMatch(r.stdout, /not configured/, 'the hooks must run on the saved key once the cache is gone');
+  assert.doesNotMatch(r.stdout, /vk_saved/);
 });
 
 test('session-start: migrate_legacy off never spawns the cleanup or writes its marker', () => {

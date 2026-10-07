@@ -164,9 +164,10 @@ function env() {
   // from userConfig rather than from the environment, so on a Claude Desktop install
   // — where there is no shell profile to export anything — this is the only source
   // that carries a credential at all. Paired under the same rule as the env vars
-  // above: both together, or neither.
-  const optUrl = (process.env.CLAUDE_PLUGIN_OPTION_GATEWAY_URL || '').trim();
+  // above: both together, or neither. An unsaved gateway_url is the manifest default
+  // (only saved options are exported), which is what .mcp.json pairs the key with too.
   const optVk = (process.env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY || '').trim();
+  const optUrl = optVk ? pluginOption('gateway_url') : '';
   if (optUrl && optVk) return { url: optUrl, vk: optVk };
   const cfg = credentialFromMcpConfig();
   if (cfg) return cfg;

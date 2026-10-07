@@ -18,7 +18,8 @@ on.
 - The hooks read the cache as their last source, after env vars, plugin options and
   `~/.claude.json`. A cached key is only used with the gateway it was issued for.
 - The browser only opens on a `startup` session that is not headless (`claude -p`,
-  the SDK and `CI` are skipped), at most once per 6 hours, and never from two
+  the SDK, `CI`, Cowork and remote sessions are skipped), at most once per 6 hours
+  (30 minutes after a timed-out sign-in), and never from two
   sessions at once. Session start stays non-blocking.
 - `auto-setup.cjs` now writes the key cache instead of running `claude mcp add`,
   which registered a second `bifrost` server next to the plugin's own one. On macOS
