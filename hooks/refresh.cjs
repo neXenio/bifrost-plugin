@@ -76,6 +76,8 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // the section rendered empty — read at the time as "the floor is wrong". The data says
 // the retrieval is weak and removing the floor only hid it. A floor plus an honest
 // empty section beats six confident-looking irrelevant facts.
+// Applies to the `similarity` field (true cosine) that luca-memory is adding. It is NOT
+// meaningful for `relevance`, which luca-memory returns as an RRF value (~0.016-0.075).
 const DEFAULT_MIN_SIM = 0.55;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
 // Per warning type, because the three luca-memory actually emits
@@ -124,6 +126,34 @@ const USE_FAST = process.env.BIFROST_MEMORY_FAST === '1';
 // 0 disables. 0.9 is deliberately tight: below that, measured recall was mostly filler.
 const RELATIVE_FLOOR = envFloat('BIFROST_MEMORY_RELATIVE_FLOOR', 0.9);
 
+// Rows that must never be injected into a session, whatever they score. Defense in
+// depth: the server is expected to filter these, the client does not rely on it.
+// `source:conversation` and `session:*` tags are deliberately absent: /reflect-all
+// stores legitimate durable facts under them.
+const EXCLUDED_FOR_INJECTION = {
+  wings: ['screenpipe', 'personal'],
+  sourceTypes: ['screenpipe', 'claude-session'],
+  tags: ['session-summary', 'source:screenpipe', 'source:email', 'source:superhuman'],
+  scope: 'private',
+};
+
+// Looks at the RAW item, before formatProvenance folds provenance into content text.
+function isExcludedForInjection(item) {
+  if (!item || typeof item !== 'object') return false;
+  const prov = item.provenance && typeof item.provenance === 'object' && !Array.isArray(item.provenance)
+    ? item.provenance : {};
+  const meta = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const lower = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+  const x = EXCLUDED_FOR_INJECTION;
+  if (x.wings.includes(lower(prov.wing))) return true;
+  if (x.sourceTypes.includes(lower(prov.source_type)) || x.sourceTypes.includes(lower(item.source_type))) return true;
+  if ([prov.scope, meta.scope, item.scope].some((v) => lower(v) === x.scope)) return true;
+  const rawTags = prov.tags != null ? prov.tags : item.tags;
+  const tags = (Array.isArray(rawTags) ? rawTags : String(rawTags || '').split(','))
+    .map(lower);
+  return tags.some((t) => x.tags.includes(t));
+}
+
 function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
 }
@@ -159,6 +189,7 @@ function parseStructured(text) {
     : null;
   if (!arr) return null;
   return arr
+    .filter((item) => !isExcludedForInjection(item))
     .map((item) => {
       if (typeof item === 'string') return { content: clean(item), similarity: null };
       if (!item || typeof item !== 'object') return null;
@@ -168,9 +199,12 @@ function parseStructured(text) {
       const provenance = formatProvenance(item.provenance);
       if (provenance) content = `${content} (Provenance: ${provenance})`;
 
-      const simRaw = typeof item.relevance === 'number' ? item.relevance
-        : typeof item.similarity === 'number' ? item.similarity
+      // Precedence: similarity (true cosine), then score, then relevance. luca-memory's
+      // `relevance` is an RRF value (~0.016-0.075) that can never clear MIN_SIM, so a
+      // server that has no `similarity` field yet injects nothing, by design.
+      const simRaw = typeof item.similarity === 'number' ? item.similarity
         : typeof item.score === 'number' ? item.score
+        : typeof item.relevance === 'number' ? item.relevance
         : null;
       return { content: clean(content), similarity: simRaw };
     })
@@ -354,7 +388,9 @@ async function searchFacts(cap, query, wing, warningsOut) {
 
 async function main() {
   const cacheFile = process.argv[2];
-  const query = process.argv[3] || 'recent decisions gotchas conventions';
+  // '' means session-start found no project signal: skip recall rather than search on
+  // a generic default. A missing argv (manual run) still gets the old default query.
+  const query = process.argv[3] === undefined ? 'recent decisions gotchas conventions' : process.argv[3];
 
   // Signed plugin-config refresh. Independent of the inject cache below (different
   // endpoint, different env), so it runs first and unconditionally — a gateway with
@@ -388,8 +424,9 @@ async function main() {
     out.memory = {
       server: caps.memory.server,
       mode: caps.memory.mode,
-      facts: await searchFacts(caps.memory, query, null, rawWarnings),
+      facts: query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
     };
+    if (!query) out.memory.skipped = 'no-signal';
     // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
     // stays on memory_search alone. session-start renders without it.
 
@@ -404,7 +441,9 @@ async function main() {
     const kbWing = (process.env.BIFROST_KB_WING || '').trim();
     const kbQuery = (process.env.BIFROST_KB_QUERY || query || '').trim();
     if (kbWing) {
-      out.kb = { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) };
+      out.kb = kbQuery
+        ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) }
+        : { server: caps.memory.server, facts: [], skipped: 'no-signal' };
     }
   }
 
@@ -434,6 +473,9 @@ function mergeWithPrevious(out, prev, now = Date.now()) {
       // KB wing switched off — and resurrecting it would keep injecting data the user
       // is no longer entitled to. Deprovisioning has to actually deprovision.
       if (!out[section]) continue;
+      // A deliberate skip is not a failed fetch: carrying old facts forward would keep
+      // injecting the generic recall the skip exists to stop.
+      if (out[section].skipped !== undefined) continue;
 
       const fresh = Array.isArray(out[section].facts) ? out[section].facts : [];
       const old = prev && prev[section] && Array.isArray(prev[section].facts) ? prev[section].facts : [];
@@ -471,5 +513,5 @@ if (require.main === module) {
 
 module.exports = {
   parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious,
-  MAX_CARRY_FORWARD_MS, searchFacts, extractSystemWarnings, actionableWarnings,
+  MAX_CARRY_FORWARD_MS, searchFacts, isExcludedForInjection, EXCLUDED_FOR_INJECTION, DEFAULT_MIN_SIM, extractSystemWarnings, actionableWarnings,
 };

@@ -2,6 +2,28 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## Unreleased
+
+**Recall queries now come from the project, and generic sessions skip recall.** The
+memory query used to be the directory name plus a fixed "recent decisions, gotchas,
+conventions, open work" suffix. Directory names like `.cursor`, `full_context`,
+`Desktop` or a home directory produced generic queries that pulled unrelated chatter.
+The query is now built from the git remote name (else toplevel, else directory), the
+ticket key found in the branch or directory name, and up to five branch words. When
+none of that exists, the query is empty, no recall runs, and previously cached facts
+are not carried forward.
+
+- Scoring prefers `similarity`, then `score`, then `relevance`. luca-memory's
+  `relevance` is an RRF value (about 0.016 to 0.075) and never clears the floor, so a
+  server without a `similarity` field injects nothing.
+- Rows from the `screenpipe` or `personal` wing, with source type `screenpipe` or
+  `claude-session`, tagged `session-summary`, `source:screenpipe`, `source:email` or
+  `source:superhuman`, or with scope `private` are dropped client side. Tags
+  `source:conversation` and `session:*` are kept, since `/reflect-all` stores durable
+  facts under them.
+- `DEFAULT_MIN_SIM` (0.55) now documents that it applies to the `similarity` cosine
+  field. Final value pending calibration.
+
 ## [1.7.3] — 2026-08-19
 
 **Weak recall is no longer injected, and the section may now be empty.** Measured

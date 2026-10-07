@@ -14,7 +14,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 
 const gw = require('../hooks/lib/gateway.cjs');
-const { parseStructured, budgetFill } = require('../hooks/refresh.cjs');
+const { parseStructured, budgetFill, isExcludedForInjection } = require('../hooks/refresh.cjs');
 
 // This plugin's own repo is also a real working project: a genuine Claude Code
 // session running here legitimately creates `.bifrost/candidates.md` via the session
@@ -2038,6 +2038,18 @@ test('an older memory server yields no facts rather than a crash', async () => {
   assert.strictEqual(calls.length, 1);
 });
 
+test('similarity beats score beats relevance when several are present', () => {
+  const one = (item) => parseStructured(JSON.stringify([{ content: 'c', ...item }]))[0].similarity;
+  assert.strictEqual(one({ similarity: 0.8, score: 0.6, relevance: 0.03 }), 0.8);
+  assert.strictEqual(one({ score: 0.6, relevance: 0.03 }), 0.6);
+  assert.strictEqual(one({ relevance: 0.03 }), 0.03);
+});
+
+test('an RRF-scale relevance alone never clears the absolute floor', () => {
+  const parsed = parseStructured(JSON.stringify([{ content: 'rrf only', relevance: 0.07 }]));
+  assert.deepStrictEqual(budgetFill(parsed), []);
+});
+
 test('search results are scored from the v0.42 `relevance` field', () => {
   // budgetFill drops anything it cannot score, so an unrecognized score field empties
   // the memory section rather than merely misordering it.
@@ -2416,4 +2428,101 @@ test('a warning with no message falls back to a synthesized "<count> <type>" lin
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /\*\*Needs attention\*\*:.*181 stale memories/);
+});
+
+
+// --- Query builder, exclusion list, deliberate recall skip ---------------------------
+
+const { buildQuery } = sessionStart;
+const { mergeWithPrevious: mergeSkipped } = require('../hooks/refresh.cjs');
+
+test('buildQuery: Orca task dir yields the ticket key', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }),
+    'LUCA-35536');
+});
+
+test('buildQuery: repo from remote url, plus branch words without prefix or generic tokens', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl: 'git@gitlab.com:g/bifrost-plugin.git',
+      toplevel: '/h/x/foo', branch: 'feature/memory-injection-fix' }),
+    'bifrost-plugin memory injection fix');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl: 'https://x/g/r.git', toplevel: '/h/x/foo', branch: 'main' }),
+    'r');
+});
+
+test('buildQuery: ticket key and words from a branch, capped at five words', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch: 'fix/LAS-12-pms_sync-retry-a1-b2-c3-d4' }),
+    'r LAS-12 pms sync retry a1 b2');
+});
+
+test('buildQuery: lowercase words like collection-123 are not read as a ticket key', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch: 'web-collection-123' }),
+    'r web collection');
+});
+
+test('buildQuery: no signal returns an empty string', () => {
+  assert.strictEqual(buildQuery({ dir: '/h', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/.cursor', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/full_context', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/Desktop', home: '/h', toplevel: '/h', branch: 'main' }), '');
+});
+
+test('buildQuery: a generic dir inside a git repo falls back to the repo', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/proj/src', home: '/h', toplevel: '/h/proj', branch: 'main' }), 'proj');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/proj/.cursor', home: '/h', toplevel: '/h/proj', branch: 'develop' }), 'proj');
+});
+
+test('isExcludedForInjection drops private, mail and screen-capture rows', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ provenance: { wing: 'screenpipe' } }));
+  assert.ok(ex({ provenance: { wing: 'personal' } }));
+  assert.ok(ex({ provenance: { source_type: 'claude-session' } }));
+  assert.ok(ex({ provenance: { source_type: 'screenpipe' } }));
+  assert.ok(ex({ provenance: { tags: 'a,session-summary,b' } }));
+  assert.ok(ex({ provenance: { tags: 'source:email' } }));
+  assert.ok(ex({ provenance: { tags: 'source:superhuman' } }));
+  assert.ok(ex({ provenance: { tags: 'source:screenpipe' } }));
+  assert.ok(ex({ provenance: { scope: 'private' } }));
+  assert.ok(ex({ metadata: { scope: 'private' } }));
+});
+
+test('isExcludedForInjection keeps durable facts, including reflect-all session tags', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(!ex({}));
+  assert.ok(!ex({ provenance: { wing: 'team', tags: 'source:conversation,session:abc,project:x' } }));
+  assert.ok(!ex({ provenance: { scope: 'team' } }));
+});
+
+test('parseStructured excludes before provenance is folded into content', () => {
+  const parsed = parseStructured(JSON.stringify([
+    { content: 'drop', similarity: 0.9, provenance: { wing: 'screenpipe' } },
+    { content: 'keep', similarity: 0.8, provenance: { wing: 'team' } },
+  ]));
+  assert.strictEqual(parsed.length, 1);
+  assert.match(parsed[0].content, /^keep/);
+});
+
+test('mergeWithPrevious does not carry facts over a deliberately skipped run', () => {
+  const prev = { at: 1000, memory: { server: 'm', facts: [{ content: 'OLD GENERIC' }] } };
+  const skipped = mergeSkipped(
+    { at: 2000, memory: { server: 'm', facts: [], skipped: 'no-signal' } }, prev, 2000);
+  assert.deepStrictEqual(skipped.memory.facts, []);
+  assert.ok(!skipped.memory.stale);
+  // An ordinary empty run still carries forward.
+  const failed = mergeSkipped({ at: 2000, memory: { server: 'm', facts: [] } }, prev, 2000);
+  assert.strictEqual(failed.memory.facts.length, 1);
+});
+
+test('mergeWithPrevious does not carry KB facts over a skipped KB run', () => {
+  const prev = { at: 1000, kb: { server: 'm', facts: [{ content: 'OLD KB' }] } };
+  const out = mergeSkipped(
+    { at: 2000, kb: { server: 'm', facts: [], skipped: 'no-signal' } }, prev, 2000);
+  assert.deepStrictEqual(out.kb.facts, []);
 });

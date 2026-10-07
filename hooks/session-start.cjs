@@ -35,7 +35,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 const usage = require('./usage.cjs');
@@ -137,10 +137,72 @@ function projectName() {
   return dir ? path.basename(dir) : '';
 }
 
+// Basenames that say nothing about the work. A session started in one of these has
+// no project signal unless git or a ticket key supplies one.
+const GENERIC_DIRS = new Set([
+  'desktop', 'downloads', 'documents', 'tmp', 'temp', 'full_context', 'screenpipe',
+  'src', 'code', 'projects', 'workspace', 'workspaces', 'repos', 'dev', 'git', 'home',
+]);
+// Branch tokens that carry no topic.
+const GENERIC_BRANCH_WORDS = new Set(['main', 'master', 'develop', 'head', 'wip', 'tmp']);
+const BRANCH_PREFIX = /^(feature|feat|fix|bugfix|hotfix|chore|task|release|refactor)[/_-]/i;
+
+function ticketKey(...sources) {
+  // Exact case first: the case-insensitive pass would read "collection-123" as a key.
+  for (const re of [/\b([A-Z][A-Z0-9]{1,5}-\d+)\b/, /\b([A-Z][A-Z0-9]{1,5}-\d+)\b/i]) {
+    for (const src of sources) {
+      const m = re.exec(src || '');
+      if (m) return m[1].toUpperCase();
+    }
+  }
+  return '';
+}
+
+// Pure query builder, split from projectQuery so it can be tested without git.
+// Returns '' when there is no meaningful project signal; the caller then skips
+// memory recall instead of searching on a directory name like "Desktop".
+function buildQuery({ dir, home, remoteUrl, toplevel, branch } = {}) {
+  const d = (dir || '').replace(/[\\/]+$/, '');
+  const base = path.basename(d);
+  // A repo rooted at $HOME (dotfiles) says nothing about the project either.
+  const top = toplevel && toplevel !== home ? toplevel : '';
+  const remote = (remoteUrl || '').trim().replace(/\/+$/, '').replace(/\.git$/, '');
+  const remoteName = remote ? remote.split(/[/:]/).pop() : '';
+  const ticket = ticketKey(branch, base);
+
+  const generic = !d || d === home || d === path.parse(d).root || base.startsWith('.')
+    || GENERIC_DIRS.has(base.toLowerCase());
+  const hasRepo = !!(remoteName || top);
+  if (generic && !hasRepo && !ticket) return '';
+
+  const repo = remoteName || (top ? path.basename(top) : (generic || ticket ? '' : base));
+  const words = String(branch || '')
+    .replace(BRANCH_PREFIX, '')
+    .replace(ticket ? new RegExp(ticket.replace(/-/g, '[-_ ]'), 'ig') : /$^/, ' ')
+    .split(/[/\-_\s]+/)
+    .filter((w) => w.length > 1 && !/^\d+$/.test(w) && !GENERIC_BRANCH_WORDS.has(w.toLowerCase()))
+    .filter((w, i, a) => a.indexOf(w) === i)
+    .slice(0, 5);
+  return [repo, ticket, ...words].filter(Boolean).join(' ');
+}
+
+function git(cwd, args) {
+  try {
+    return execFileSync('git', args, {
+      cwd, timeout: 300, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
+    }).trim();
+  } catch (_) { return ''; }
+}
+
 function projectQuery() {
-  const n = projectName();
-  const base = 'recent decisions, gotchas, conventions, open work';
-  return n ? `${n} ${base}` : base;
+  const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  return buildQuery({
+    dir,
+    home: os.homedir(),
+    remoteUrl: git(dir, ['config', '--get', 'remote.origin.url']),
+    toplevel: git(dir, ['rev-parse', '--show-toplevel']),
+    branch: git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
+  });
 }
 
 // Cache key includes a hash of the FULL project path. Keying on the bare basename
@@ -811,4 +873,4 @@ function main() {
 if (require.main === module) main();
 
 // Exported so tests drive the real implementation rather than a copy of it.
-module.exports = { cacheFile, safeUrl, projectQuery };
+module.exports = { cacheFile, safeUrl, projectQuery, buildQuery };
