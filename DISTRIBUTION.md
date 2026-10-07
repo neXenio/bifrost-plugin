@@ -63,8 +63,44 @@ mirror, set `"default": true` on `auto_login` in `.claude-plugin/plugin.json`
 and, if the keyapp is not on the gateway's host, a `keyapp_url` default. Each
 user's first interactive session then opens company sign-in once, caches the
 key locally and feeds it to the MCP connection through the `headersHelper`.
-Headless runs (`claude -p`, SDK, `CI`) never open a browser, and a failed
-attempt waits 6 hours before retrying.
+Headless runs (`claude -p`, SDK, `CI`) and Cowork or remote sessions never
+open a browser. A failed attempt waits 6 hours before retrying, 30 minutes
+after a sign-in that timed out.
+
+### Migrating existing users (`migrate_legacy`, 1.8.0)
+
+Two older setups keep the org-synced plugin from working, and both are common on
+machines onboarded before the plugin existed:
+
+1. **A hand-added `bifrost` MCP server** (`claude mcp add`, the key page,
+   `scripts/install.js`) at the same URL. Claude Code drops a plugin server that
+   duplicates a manually configured URL, so the plugin's server and its
+   `headersHelper` never run.
+2. **A self-installed `bifrost-plugin@bifrost-marketplace`.** A synced plugin
+   loses every name conflict, so the org copy never loads while the marketplace
+   copy is installed.
+
+Set `"default": true` on `migrate_legacy` in the private mirror. Once a day, a
+detached worker (`hooks/migrate-legacy.cjs`) moves the key of a matching
+`bifrost` entry into the plugin's key cache and runs `claude mcp remove bifrost`
+(user scope, and local scope where that is unambiguous). Only an entry named
+`bifrost` whose URL equals the gateway is touched, and only when a key for the
+gateway exists afterwards. Claude Desktop's own `claude_desktop_config.json` is
+not read by Claude Code at startup and does not collide.
+
+Case 2 is only reachable from the marketplace copy itself, i.e. from the public
+1.8.0, where `migrate_legacy` defaults to false, so the self-uninstall needs the
+user to switch the option on. When it is on, the copy checks that it is the
+`@bifrost-marketplace` install (`installed_plugins.json` install path), that the
+signed-in account's synced bucket (`plugins/synced/<org>_<account>/`) holds the
+plugin, that the synced copy is not disabled and that no API key or token
+override is set, then runs `claude plugin uninstall
+bifrost-plugin@bifrost-marketplace`. For a fleet, the reliable route is managed
+settings, which need no cooperation from the old copy:
+
+```json
+{ "enabledPlugins": { "bifrost-plugin@bifrost-marketplace": false } }
+```
 
 ## Per-user onboarding (what each engineer does)
 

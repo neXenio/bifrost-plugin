@@ -931,6 +931,27 @@ function reconcileKeyCache(env = process.env) {
   else if (action === 'replace') keyCache.write(cached.url, envVk);
 }
 
+// Opt-in cleanup of pre-plugin setups (`migrate_legacy`), see migrate-legacy.cjs. At
+// most one attempt a day; the marker is written before the spawn so a crashing worker
+// cannot turn into one attempt per session.
+const MIGRATE_MARKER = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'migrate-legacy.json');
+const MIGRATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function maybeStartMigration(now = Date.now()) {
+  if (!/^(1|true|yes)$/i.test(gw.pluginOption('migrate_legacy'))) return;
+  const last = readAt(MIGRATE_MARKER);
+  if (last !== null && now - last < MIGRATE_INTERVAL_MS) return;
+  try {
+    fs.mkdirSync(path.dirname(MIGRATE_MARKER), { recursive: true });
+    fs.writeFileSync(MIGRATE_MARKER, JSON.stringify({ at: now }), 'utf8');
+    spawn(
+      process.execPath,
+      [path.join(__dirname, 'migrate-legacy.cjs')],
+      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
+    ).unref();
+  } catch (_) {}
+}
+
 function readStdin(ms) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -973,6 +994,7 @@ function run(input) {
     let signingIn = false;
     try { reconcileKeyCache(); } catch (_) {}
     if (input) { try { signingIn = maybeStartAutoLogin(input); } catch (_) {} }
+    try { maybeStartMigration(); } catch (_) {}
     emitEndpointMigrationNotice();
     emitContext();
     // Verified-at-write-time config, straight off disk. No network, so a slow or dead

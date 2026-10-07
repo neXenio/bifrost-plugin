@@ -29,6 +29,10 @@ Installing prompts for the plugin's config values:
   `rm ~/.cache/bifrost-plugin/vk`.
 - **Key page URL** (`keyapp_url`, optional): where sign-in fetches the key.
   Empty means the gateway's own host.
+- **Clean up older Bifrost setups** (`migrate_legacy`, default off): once a
+  day, moves the key of a hand-added `bifrost` server for this gateway into the
+  plugin and removes that server, and uninstalls a marketplace copy of this
+  plugin when your organization already provides it.
 
 The bundled `.mcp.json` reads these back as `${user_config.gateway_url}` and so
 on, so no separate registration step is needed. Change any value later with

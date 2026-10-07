@@ -29,6 +29,12 @@
       "type": "string",
       "title": "Key page URL (optional)",
       "description": "Where sign-in fetches your key. Leave empty to use the gateway's own host."
+    },
+    "migrate_legacy": {
+      "type": "boolean",
+      "title": "Clean up older Bifrost setups",
+      "description": "Once a day, move the key of a hand-added bifrost MCP server for this gateway into the plugin and remove that server, and uninstall a marketplace copy of this plugin when your organization already provides it. Off by default.",
+      "default": false
     }
   }
 }

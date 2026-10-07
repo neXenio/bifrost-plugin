@@ -351,6 +351,12 @@ test('session-start: a saved virtual_key removes a cached key for the same gatew
   assert.ok(!fs.existsSync(path.join(dir, 'vk')));
 });
 
+test('session-start: migrate_legacy off never spawns the cleanup or writes its marker', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
+  runSessionStart({}, home);
+  assert.ok(!fs.existsSync(path.join(home, '.cache', 'bifrost-plugin', 'migrate-legacy.json')));
+});
+
 // ---------------------------------------------------------------------------
 // auto-setup.cjs worker: callback success clears the needs-auth record (D1), a timeout
 // records the short cooldown (D5).

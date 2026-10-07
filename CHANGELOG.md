@@ -42,6 +42,11 @@ on.
   sessions (`CLAUDE_CODE_IS_COWORK`, `CLAUDE_CODE_REMOTE`, a `remote*` entrypoint)
   never start a sign-in. The in-flight lock can no longer be taken over or released
   by a second session.
+- New `migrate_legacy` option (default false): once a day, moves the key of a
+  hand-added `bifrost` server for this gateway into the key cache and removes the
+  server, which otherwise suppresses the plugin's own; and uninstalls a
+  `bifrost-plugin@bifrost-marketplace` copy when the organization syncs the plugin.
+  See DISTRIBUTION.md.
 - **Removed: the `oauth` block in `.mcp.json` and the `oauth_client_id` option.**
   Claude Code 2.1.293 never substitutes `${user_config.*}` inside `oauth`, even when
   the option is saved, so Keycloak always received the literal placeholder as
