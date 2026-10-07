@@ -42,9 +42,14 @@ function buildQuery({ dir, home, remoteUrl, toplevel, branch } = {}) {
   // A repo rooted at $HOME (dotfiles) says nothing about the project, remote included.
   const homeRepo = !!toplevel && atHome(toplevel);
   const top = toplevel && !homeRepo ? toplevel : '';
-  const remote = homeRepo ? '' : (remoteUrl || '').trim().replace(/[\\/]+$/, '').replace(/\.git$/, '');
-  const lastSeg = remote ? remote.split(/[\\/:]/).pop() : '';
-  const remoteName = /^\d*$/.test(lastSeg) ? '' : lastSeg; // ssh://git@host:2222/ -> 2222
+  const remote = homeRepo ? '' : (remoteUrl || '').trim()
+    .replace(/[\\/]+$/, '').replace(/\.git$/, '')
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1'); // drop userinfo (tokens) from URLs
+  // A URL with a host and no path names no repo (https://user:token@host).
+  const lastSeg = remote && !/^[a-z][a-z0-9+.-]*:\/\/[^/]*$/i.test(remote)
+    ? remote.split(/[\\/:]/).pop() : '';
+  // ssh://git@host:2222/ -> 2222; a segment still holding '@' is userinfo, not a name.
+  const remoteName = /^\d*$/.test(lastSeg) || lastSeg.includes('@') ? '' : lastSeg;
   const ticket = ticketKey(branch, base);
 
   const generic = !d || atHome(d) || d === path.parse(d).root || base.startsWith('.')
@@ -76,6 +81,8 @@ function git(cwd, args, timeout) {
   try {
     const out = execFileSync('git', args, {
       cwd, timeout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      // The "not a git repository" match below is English-only.
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
     }).trim();
     return { out, error: false };
   } catch (e) {

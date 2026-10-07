@@ -2682,3 +2682,49 @@ test('parseStructured finds a bare array, results, matches and facts wrappers', 
   assert.strictEqual(parseStructured(JSON.stringify({ data: { results: [] } })).length, 0);
   assert.strictEqual(parseStructured(JSON.stringify({ error: 'x' })), null);
 });
+
+// --- Query privacy, locale, cache head (C-22) ----------------------------------------
+
+test('buildQuery: userinfo in a remote URL never reaches the query', () => {
+  const q = (remoteUrl) => buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl, toplevel: '/h/x/foo' });
+  assert.strictEqual(q('https://user:SECRETTOKEN@host'), 'foo');
+  assert.strictEqual(q('https://pass@host/'), 'foo');
+  assert.strictEqual(q('https://u:SECRETTOKEN@gitlab.example.com/grp/sub/my-proj.git'), 'my-proj');
+  assert.strictEqual(q('user:SECRETTOKEN@host'), 'foo', 'a last segment holding @ is dropped');
+  assert.ok(!q('https://user:SECRETTOKEN@host').includes('SECRETTOKEN'));
+});
+
+test('projectQuery: "not a git repository" is recognised in a non-English locale', () => {
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'plain-'));
+  const saved = { ...process.env };
+  Object.assign(process.env, { LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8', LANGUAGE: 'de' });
+  try {
+    assert.strictEqual(projectQuery(plain, '/nowhere').gitError, false);
+  } finally {
+    for (const k of ['LC_ALL', 'LANG', 'LANGUAGE']) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  }
+});
+
+test('projectQuery starts git with LC_ALL=C and LANG=C', () => {
+  // A git shim that records the locale it was started with.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-'));
+  const log = path.join(bin, 'locale.log');
+  fs.writeFileSync(path.join(bin, 'git'),
+    `#!/bin/sh\necho "$LC_ALL/$LANG" >> '${log}'\nexit 128\n`, { mode: 0o755 });
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const saved = { ...process.env };
+  Object.assign(process.env, { PATH: `${bin}${path.delimiter}${saved.PATH}`, LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8' });
+  try {
+    projectQuery(os.tmpdir(), '/nowhere');
+  } finally {
+    for (const k of ['PATH', 'LC_ALL', 'LANG']) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  }
+  const seen = fs.readFileSync(log, 'utf8').trim().split('\n');
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((l) => l === 'C/C'), `git saw ${seen.join(', ')}`);
+});
