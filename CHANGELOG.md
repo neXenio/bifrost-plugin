@@ -49,6 +49,12 @@ on.
   server, which otherwise suppresses the plugin's own. A self-installed
   `bifrost-plugin@bifrost-marketplace` next to the org-synced copy is handled by
   managed settings, see DISTRIBUTION.md.
+- The signed-in key is cached for the plugin's `gateway_url`; a lone `BIFROST_URL`
+  (without `BIFROST_VK`) no longer decides where it may be sent.
+- Tool names in the injected context follow the session: `mcp__plugin_<plugin>_bifrost__`
+  for the plugin's own server, `mcp__bifrost__` only next to a hand-added `bifrost`
+  server, with the claude.ai connector form (`mcp__claude_ai_<Name>__`) named as the
+  alternative. Usage counting covers all three.
 - **Removed: the `oauth` block in `.mcp.json` and the `oauth_client_id` option.**
   Claude Code 2.1.293 never substitutes `${user_config.*}` inside `oauth`, even when
   the option is saved, so Keycloak always received the literal placeholder as
