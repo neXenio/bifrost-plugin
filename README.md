@@ -18,7 +18,7 @@ degrades gracefully — those features simply no-op.
 |--------|----------|
 | 1 — Plugin Lifecycle Hooks | Auto-injects recalled memory context at session start, enforces skill-discovery hints before non-trivial tasks, spools memory candidates, and tracks capability usage |
 | 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
-| 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node bin/install.js --key vk_…` (or `/bifrost-setup`) |
+| 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node scripts/install.js --key vk_…` (or `/bifrost-setup`) |
 | 4 — Agent-driven memory | Recalls context via gateway memory tools before non-trivial tasks and saves durable decisions after work |
 
 ### The hooks, concretely
@@ -388,8 +388,8 @@ a thin wrapper that registers the server through Claude Code's own CLI
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>   # then persist env vars as above
-node bin/install.js --dry-run             # prints the claude mcp add command instead
+node scripts/install.js --key vk_<your-key>   # then persist env vars as above
+node scripts/install.js --dry-run             # prints the claude mcp add command instead
 ```
 
 > **macOS:** Prefer `~/.claude/settings.json` (see above) over shell profile alone.
@@ -483,7 +483,7 @@ Marketplace installs need no registration step at all: the plugin ships this
 Claude Code prompts for at install time on every surface (see [Registration
 and connection modes](#registration-and-connection-modes)).
 
-The manual fallback (`bin/install.js`, or `/bifrost-setup`) registers a
+The manual fallback (`scripts/install.js`, or `/bifrost-setup`) registers a
 separate server at user scope via `claude mcp add --scope user`; the plugin
 never edits Claude Code config files on its own. That path still resolves
 `${BIFROST_URL}` and `${BIFROST_VK}` at runtime from Claude Code's

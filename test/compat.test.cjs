@@ -11,7 +11,7 @@
 //      transport, and placeholder-templated auth (.mcp.json shape pinned exactly),
 //      same hook events, same injection env-var switches, and old cache files
 //      still render.
-//   3. Script/CI users of bin/install.js. Contract: --key / --dry-run / --help
+//   3. Script/CI users of scripts/install.js. Contract: --key / --dry-run / --help
 //      flags still work and the server keeps the name `bifrost`.
 //
 // Run: npm test  (node --test test/)
@@ -289,11 +289,11 @@ test('BIFROST_MEMORY_INJECT=0 still suppresses the memory header', () => {
 // ---------------------------------------------------------------------------
 
 test('install.js keeps --help, --dry-run, --key flags and the server name bifrost', () => {
-  const help = execFileSync(process.execPath, [path.join(ROOT, 'bin', 'install.js'), '--help'], { encoding: 'utf8' });
+  const help = execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'install.js'), '--help'], { encoding: 'utf8' });
   assert.match(help, /--key/);
   assert.match(help, /--dry-run/);
 
-  const dry = execFileSync(process.execPath, [path.join(ROOT, 'bin', 'install.js'), '--dry-run'], {
+  const dry = execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'install.js'), '--dry-run'], {
     encoding: 'utf8',
     env: { ...process.env, BIFROST_URL: 'https://gw.example/mcp' },
   });
@@ -301,8 +301,16 @@ test('install.js keeps --help, --dry-run, --key flags and the server name bifros
   assert.match(dry, /x-bf-vk/);
 });
 
+test('no top-level bin/ (claude.ai org sync rejects the plugin), npm bin points at scripts/', () => {
+  assert.ok(!fs.existsSync(path.join(ROOT, 'bin')), 'a top-level bin/ makes organization sync reject the plugin');
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  assert.strictEqual(pkg.bin['bifrost-plugin-install'], 'scripts/install.js');
+  assert.ok(pkg.files.includes('scripts/') && !pkg.files.includes('bin/'));
+  assert.ok(fs.existsSync(path.join(ROOT, pkg.bin['bifrost-plugin-install'])));
+});
+
 test('install.js fails loudly (not silently) when BIFROST_URL is unset', () => {
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'install.js'), '--dry-run'], {
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'install.js'), '--dry-run'], {
     encoding: 'utf8',
     env: { ...process.env, BIFROST_URL: '' },
   });

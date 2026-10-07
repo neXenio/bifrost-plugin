@@ -20,7 +20,7 @@ From the plugin root (or use the slash command — see below):
 
 ```bash
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node "${CLAUDE_PLUGIN_ROOT}/bin/install.js" --key vk_<your-key>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/install.js" --key vk_<your-key>
 ```
 
 The installer:

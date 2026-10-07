@@ -5,7 +5,7 @@ description: "Manually wire a Bifrost MCP server into Claude Code (mcp.json) whe
 
 # Manual Bifrost MCP Setup
 
-Use this when the automated installer (`node bin/install.js` / `/bifrost-setup`)
+Use this when the automated installer (`node scripts/install.js` / `/bifrost-setup`)
 can't run (no internet, policy restriction, etc.).
 
 Note: if the plugin itself is installed and enabled, none of this is needed —

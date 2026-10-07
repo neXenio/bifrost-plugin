@@ -25,7 +25,7 @@ const DISCOVERY_CACHE = path.join(CACHE_DIR, 'discovery.json');
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h — server topology rarely changes
 
 // Hook processes are separate OS processes and do NOT inherit Claude Code's MCP
-// credential. Installing with `claude mcp add` (which is what bin/install.js and
+// credential. Installing with `claude mcp add` (which is what scripts/install.js and
 // auto-setup.cjs do) writes the gateway URL and virtual key into ~/.claude.json as
 // MCP server config, never into the environment — so every env-only lookup here
 // came back empty and the whole hook layer went silently inert. Fall back to that

@@ -10,7 +10,7 @@ with this plugin enabled gets:
 1. **Skill discovery** — non-trivial prompts receive a hint to call the gateway's
    skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting,
    so existing workflows are reused.
-2. **One-command onboarding** — `node bin/install.js --key vk_…` (or the
+2. **One-command onboarding** — `node scripts/install.js --key vk_…` (or the
    `/bifrost-setup` slash command) wires the MCP entry in seconds.
 3. **Agent-driven memory** — the agent recalls relevant context before non-trivial
    tasks and saves decisions after significant work, using the gateway's memory MCP
@@ -36,7 +36,7 @@ with this plugin enabled gets:
 ```bash
 # From the plugin root:
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>
+node scripts/install.js --key vk_<your-key>
 
 # Or use the slash command inside Claude Code:
 /bifrost-setup

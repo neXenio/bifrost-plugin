@@ -56,10 +56,10 @@ directly with the Claude Code CLI:
 
 ```bash
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node "${CLAUDE_PLUGIN_ROOT}/bin/install.js" --key vk_<your-key>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/install.js" --key vk_<your-key>
 
 # Or without a key (VK must already be in env):
-node "${CLAUDE_PLUGIN_ROOT}/bin/install.js"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/install.js"
 ```
 
 This wraps exactly one command, `claude mcp add --scope user --transport http

@@ -98,9 +98,9 @@ directly):
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://bifrost.culture4.life/mcp
-node bin/install.js            # uses the ${BIFROST_VK} runtime template
-node bin/install.js --key vk_… # or bake the key into the entry instead
-node bin/install.js --dry-run  # print the command without running it
+node scripts/install.js            # uses the ${BIFROST_VK} runtime template
+node scripts/install.js --key vk_… # or bake the key into the entry instead
+node scripts/install.js --dry-run  # print the command without running it
 ```
 
 Without `--key`, the key is never written to disk — set `BIFROST_VK` in your
