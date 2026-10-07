@@ -3,6 +3,7 @@
 // branch, ticket key). Used by refresh.cjs, which runs detached, so the git calls here
 // never count against the SessionStart hook's own time limit.
 
+const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -108,4 +109,31 @@ function projectQuery(dir, home, timeout = 2000) {
   };
 }
 
-module.exports = { buildQuery, ticketKey, projectQuery };
+// Current HEAD of the repo containing dir ('ref: refs/heads/x' or a sha), read from disk
+// with no process spawn so session-start can use it. '' outside a repo or on any error.
+// Handles the `.git` file of a linked worktree.
+function headRef(dir) {
+  try {
+    let d = path.resolve(dir || '');
+    for (let i = 0; i < 12; i++) {
+      const dotGit = path.join(d, '.git');
+      let st = null;
+      try { st = fs.statSync(dotGit); } catch (_) { /* keep walking up */ }
+      if (st) {
+        let gitDir = dotGit;
+        if (st.isFile()) {
+          const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+          if (!m) return '';
+          gitDir = path.resolve(d, m[1].trim());
+        }
+        return fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+      }
+      const up = path.dirname(d);
+      if (up === d) break;
+      d = up;
+    }
+  } catch (_) { /* unreadable */ }
+  return '';
+}
+
+module.exports = { buildQuery, ticketKey, projectQuery, headRef };

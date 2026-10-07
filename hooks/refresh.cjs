@@ -8,13 +8,19 @@
 // Usage: node refresh.cjs <cacheFile> --dir <projectDir>   (builds the query via git)
 //        node refresh.cjs <cacheFile> <memoryQuery>         (older session-start; '' = skip)
 // Writes {v, at, skills:{server,mode[,count]},
-// memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince]},
+// memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince,head]},
 // kb:{...}} to the cache file. Silent-fail; always exits 0.
+//
+// Session-start fact priming is OFF by default: with BIFROST_MEMORY_PRIME unset (and
+// no signed `memoryPrime` hook field) this worker makes no memory_search call, builds
+// no query and runs no git; the memory section only carries the server/mode that
+// session-start needs to print the recall/store guidance. See CHANGELOG for the
+// measured reason and the criterion for turning it back on.
 //
 // KB recall reuses the same memory server/capability — there is no separate
 // kb-mcp. It is just memory_search scoped to the KB wing (wing=<BIFROST_KB_WING>).
-// No default wing name is assumed: KB recall is skipped entirely unless
-// BIFROST_KB_WING is set, configurable via BIFROST_KB_WING / BIFROST_KB_QUERY.
+// No default wing name is assumed: KB recall is skipped entirely unless priming is on
+// AND BIFROST_KB_WING is set, configurable via BIFROST_KB_WING / BIFROST_KB_QUERY.
 //
 // Sizing is adaptive (env-configurable, all optional):
 //   BIFROST_MEMORY_MAX_FACTS  — cap on injected facts (default 6)
@@ -53,7 +59,7 @@ const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
-const { projectQuery } = require('./lib/project-query.cjs');
+const { projectQuery, headRef } = require('./lib/project-query.cjs');
 
 const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency is free
 const DEFAULT_MAX_FACTS = 6;
@@ -172,12 +178,6 @@ function formatProvenance(provenance) {
     .join(', ');
 }
 
-// Best-effort structured parse of a memory_search response: an array of
-// {content|text, relevance|similarity|score[, provenance]} objects, optionally
-// wrapped as findResults describes. Non-fact elements
-// such as {_system_warnings:[...]} are ignored. Returns null (not an array) if the
-// shape isn't recognized, so callers can fall back to the legacy regex scan.
-// `similarity`/`score` are other gateways' spellings, not luca-memory compatibility.
 // The result array of a memory_search response: the value itself, or the first array
 // under results / matches / facts / data / result, looked up through nested wrappers
 // ({"data":{"results":[...]}}, as code mode may return) up to three levels deep, or in
@@ -201,6 +201,12 @@ function findResults(data, depth = 0) {
   return null;
 }
 
+// Best-effort structured parse of a memory_search response: an array of
+// {content|text, relevance|similarity|score[, provenance]} objects, optionally
+// wrapped as findResults describes. Non-fact elements
+// such as {_system_warnings:[...]} are ignored. Returns null (not an array) if the
+// shape isn't recognized, so callers can fall back to the legacy regex scan.
+// `similarity`/`score` are other gateways' spellings, not luca-memory compatibility.
 function parseStructured(text) {
   if (!text) return null;
   let data;
@@ -408,16 +414,44 @@ async function searchFacts(cap, query, wing, warningsOut) {
   return budgetFill(results);
 }
 
+// Same resolution session-start uses, so the hook and the worker always agree on it.
+function primeEnabled() {
+  let cfg = null;
+  try { cfg = pc.loadCached(); } catch (_) {}
+  return pc.hookFlag(cfg, 'session-start', 'memoryPrime', 'BIFROST_MEMORY_PRIME', false);
+}
+
+// Write through a temp file in the same directory and rename, so a concurrent reader
+// sees the old file or the new one, never a torn half.
+function writeCacheAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, data, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (_) {
+    try { fs.unlinkSync(tmp); } catch (__) {}
+  }
+}
+
 async function main() {
   const cacheFile = process.argv[2];
+  const prime = primeEnabled();
   // '' means no project signal: skip recall rather than search on a generic default.
   // A missing argv (manual run) still gets the old default query.
   let query = process.argv[3] === undefined ? 'recent decisions gotchas conventions' : process.argv[3];
   // True when git timed out or failed (not "no repo"): the empty query is then unknown,
   // not a deliberate skip, so the old facts must survive via carry-forward.
   let gitError = false;
-  if (process.argv[3] === '--dir') {
-    ({ query, gitError } = projectQuery(process.argv[4] || process.cwd(), os.homedir()));
+  // HEAD the facts were recalled for; session-start renders them only while it matches.
+  let head;
+  if (prime && process.argv[3] === '--dir') {
+    const dir = process.argv[4] || process.cwd();
+    ({ query, gitError } = projectQuery(dir, os.homedir()));
+    // A failed git call leaves only a degraded query (the bare directory name). Searching
+    // on it would overwrite good facts with unrelated ones; keep what is cached instead.
+    if (gitError) query = '';
+    head = headRef(dir);
   }
 
   // Signed plugin-config refresh. Independent of the inject cache below (different
@@ -452,9 +486,12 @@ async function main() {
     out.memory = {
       server: caps.memory.server,
       mode: caps.memory.mode,
-      facts: query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
+      facts: prime && query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
     };
-    if (!query && !gitError) out.memory.skipped = 'no-signal';
+    // 'prime-off' is a deliberate skip like 'no-signal': nothing is carried forward.
+    if (!prime) out.memory.skipped = 'prime-off';
+    else if (!query && !gitError) out.memory.skipped = 'no-signal';
+    if (head !== undefined) out.memory.head = head;
     // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
     // stays on memory_search alone. session-start renders without it.
 
@@ -465,13 +502,14 @@ async function main() {
     if (warnings.length) out.memory.warnings = warnings;
 
     // No default wing name: KB recall is opt-in only, via an explicit
-    // BIFROST_KB_WING configured for this gateway's KB scope.
+    // BIFROST_KB_WING configured for this gateway's KB scope, and only with priming on.
     const kbWing = (process.env.BIFROST_KB_WING || '').trim();
     const kbQuery = (process.env.BIFROST_KB_QUERY || query || '').trim();
-    if (kbWing) {
+    if (prime && kbWing) {
       out.kb = kbQuery
         ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) }
         : { server: caps.memory.server, facts: [], ...(gitError ? {} : { skipped: 'no-signal' }) };
+      if (head !== undefined) out.kb.head = head;
     }
   }
 
@@ -481,18 +519,15 @@ async function main() {
   // Mirrors the fail-closed contract the signed plugin-config path already has.
   try {
     const prev = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
-    // Facts cached before v2 came from the old query and are never rendered; do not
-    // carry them forward under a v2 stamp.
-    if (!(prev.v >= CACHE_SCHEMA)) {
-      for (const k of ['memory', 'kb']) if (prev[k]) prev[k].facts = [];
+    // Facts cached before v2 came from the old query and are never rendered; facts
+    // recalled on another branch belong to another query. Do not carry either forward.
+    for (const k of ['memory', 'kb']) {
+      if (prev[k] && (!(prev.v >= CACHE_SCHEMA) || prev[k].head !== head)) prev[k].facts = [];
     }
     mergeWithPrevious(out, prev);
   } catch (_) { /* no previous cache — nothing to preserve */ }
 
-  try {
-    fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-    fs.writeFileSync(cacheFile, JSON.stringify(out), 'utf8');
-  } catch (_) {}
+  writeCacheAtomic(cacheFile, JSON.stringify(out));
 }
 
 // Carry forward the previous cache where this run produced nothing usable. Split out
@@ -547,4 +582,5 @@ if (require.main === module) {
 module.exports = {
   parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious,
   MAX_CARRY_FORWARD_MS, searchFacts, isExcludedForInjection, EXCLUDED_FOR_INJECTION, DEFAULT_MIN_SIM, extractSystemWarnings, actionableWarnings,
+  writeCacheAtomic,
 };

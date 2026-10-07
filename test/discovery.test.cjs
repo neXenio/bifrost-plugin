@@ -458,11 +458,21 @@ function tmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-home-'));
 }
 
+// Fact priming is off by default, so the tests that look at rendered facts opt in here.
+// The default itself is covered by runSessionStartUnprimed.
 function runSessionStart(env, home) {
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
-    env: { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', ...env },
+    env: { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', BIFROST_MEMORY_PRIME: '1', ...env },
     encoding: 'utf8',
     timeout: 10000,
+  });
+}
+
+function runSessionStartUnprimed(env, home) {
+  const e = { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', ...env };
+  delete e.BIFROST_MEMORY_PRIME;
+  return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
+    env: e, encoding: 'utf8', timeout: 10000,
   });
 }
 
@@ -471,9 +481,14 @@ function seedCache(home, projDir, payload) {
   const digest = crypto.createHash('sha256').update(projDir).digest('hex').slice(0, 12);
   const dir = path.join(home, '.cache', 'bifrost-plugin');
   fs.mkdirSync(dir, { recursive: true });
+  // Facts only render for the HEAD they were recalled on; a temp dir has none ('').
+  const withHead = { ...payload };
+  for (const k of ['memory', 'kb']) {
+    if (withHead[k] && withHead[k].head === undefined) withHead[k] = { ...withHead[k], head: '' };
+  }
   fs.writeFileSync(
     path.join(dir, `inject-${label}-${digest}.json`),
-    JSON.stringify(Object.assign({ v: 2, at: Date.now() }, payload))
+    JSON.stringify(Object.assign({ v: 2, at: Date.now() }, withHead))
   );
   return dir;
 }
@@ -1559,7 +1574,7 @@ function sessionWithCacheAge(ageMinutes, extraEnv) {
     v: 2,
     at,
     skills: { server: 's', mode: 'flat' },
-    memory: { server: 'm', mode: 'flat', total: 1, facts: [{ content: 'f' }] },
+    memory: { server: 'm', mode: 'flat', total: 1, head: '', facts: [{ content: 'f' }] },
   }));
   return runSessionStart(Object.assign({
     CLAUDE_PROJECT_DIR: proj, BIFROST_URL: 'https://g.example/mcp', BIFROST_VK: 'k',
@@ -2683,6 +2698,69 @@ test('parseStructured finds a bare array, results, matches and facts wrappers', 
   assert.strictEqual(parseStructured(JSON.stringify({ error: 'x' })), null);
 });
 
+// --- Fact priming is opt-in (C-14) ---------------------------------------------------
+
+function primedSession(env, memory) {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, { memory, kb: { server: 'teammemory', facts: [{ content: 'KB-FACT' }] } });
+  return { proj, home, run: (run) => run({ CLAUDE_PROJECT_DIR: proj, ...env }, home) };
+}
+
+const FACTS_CACHE = { server: 'teammemory', mode: 'flat', facts: [{ content: 'CACHED-FACT' }] };
+
+test('by default session-start prints the recall and store guidance but no facts', () => {
+  const s = primedSession({}, FACTS_CACHE);
+  const r = s.run(runSessionStartUnprimed);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /## Bifrost memory/);
+  assert.match(r.stdout, /\*\*Recall\*\*/);
+  assert.match(r.stdout, /\*\*Store\*\*/);
+  assert.ok(!r.stdout.includes('CACHED-FACT'), 'old facts must not render when priming is off');
+  assert.ok(!r.stdout.includes('KB-FACT'), 'nor KB facts');
+  assert.ok(!r.stdout.includes('untrusted-reference-data'));
+});
+
+test('BIFROST_MEMORY_PRIME=1 renders the cached facts', () => {
+  const s = primedSession({}, FACTS_CACHE);
+  const r = s.run(runSessionStart);
+  assert.ok(r.stdout.includes('CACHED-FACT'));
+  assert.ok(r.stdout.includes('KB-FACT'));
+});
+
+test('BIFROST_MEMORY_PRIME=0 and an empty value stay off', () => {
+  for (const v of ['0', '']) {
+    const s = primedSession({}, FACTS_CACHE);
+    const r = s.run((env, home) => runSessionStart({ ...env, BIFROST_MEMORY_PRIME: v }, home));
+    assert.ok(!r.stdout.includes('CACHED-FACT'), `PRIME=${JSON.stringify(v)}`);
+  }
+});
+
+test('the signed plugin-config memoryPrime field turns priming on, and a lock beats the env', () => {
+  const pcMod = require('../hooks/lib/plugin-config.cjs');
+  const cfg = (locked) => ({ hooks: { 'session-start': {
+    enabled: true, fields: { memoryPrime: true }, lockedFields: locked ? ['memoryPrime'] : [] } } });
+  const prev = process.env.BIFROST_MEMORY_PRIME;
+  try {
+    delete process.env.BIFROST_MEMORY_PRIME;
+    const flag = (c) => pcMod.hookFlag(c, 'session-start', 'memoryPrime', 'BIFROST_MEMORY_PRIME', false);
+    assert.strictEqual(flag(null), false);
+    assert.strictEqual(flag(cfg(false)), true);
+    process.env.BIFROST_MEMORY_PRIME = '0';
+    assert.strictEqual(flag(cfg(false)), false, 'unlocked: the local env wins');
+    assert.strictEqual(flag(cfg(true)), true, 'locked: the server value wins');
+  } finally {
+    if (prev === undefined) delete process.env.BIFROST_MEMORY_PRIME; else process.env.BIFROST_MEMORY_PRIME = prev;
+  }
+});
+
+test('facts recalled on another branch are not rendered', () => {
+  const s = primedSession({}, { ...FACTS_CACHE, head: 'ref: refs/heads/other-branch' });
+  const r = s.run(runSessionStart);
+  assert.ok(!r.stdout.includes('CACHED-FACT'));
+  assert.match(r.stdout, /\*\*Recall\*\*/, 'the guidance still renders');
+});
+
 // --- Query privacy, locale, cache head (C-22) ----------------------------------------
 
 test('buildQuery: userinfo in a remote URL never reaches the query', () => {
@@ -2727,4 +2805,24 @@ test('projectQuery starts git with LC_ALL=C and LANG=C', () => {
   const seen = fs.readFileSync(log, 'utf8').trim().split('\n');
   assert.ok(seen.length >= 1);
   assert.ok(seen.every((l) => l === 'C/C'), `git saw ${seen.join(', ')}`);
+});
+
+test('headRef reads HEAD from a repo, a subdirectory and a linked worktree, and is empty elsewhere', () => {
+  const { headRef } = require('../hooks/lib/project-query.cjs');
+  const { execFileSync } = require('child_process');
+  const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=n',
+    '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } });
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'head-')));
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'commit', '-q', '--allow-empty', '-m', 'x');
+  assert.strictEqual(headRef(repo), 'ref: refs/heads/main');
+  fs.mkdirSync(path.join(repo, 'a', 'b'), { recursive: true });
+  assert.strictEqual(headRef(path.join(repo, 'a', 'b')), 'ref: refs/heads/main');
+  const wt = path.join(repo, '..', path.basename(repo) + '-wt');
+  git(repo, 'worktree', 'add', '-q', '-b', 'feat-x', wt);
+  assert.strictEqual(headRef(wt), 'ref: refs/heads/feat-x');
+  git(repo, 'checkout', '-q', '-b', 'LUCA-9-gamma');
+  assert.strictEqual(headRef(repo), 'ref: refs/heads/LUCA-9-gamma');
+  assert.strictEqual(headRef(fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-'))), '');
+  assert.strictEqual(headRef('/nonexistent/dir/for/sure'), '');
 });
