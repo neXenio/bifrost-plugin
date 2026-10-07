@@ -18,8 +18,15 @@
 //      all session-start-initiated network traffic) with BIFROST_REFRESH=0.
 //
 // This hook only reads/writes its own cache under ~/.cache/bifrost-plugin/. It
-// never launches other programs, opens browsers, or touches Claude Code
-// configuration — onboarding is exclusively the explicit /bifrost-setup command.
+// never touches Claude Code configuration, and by default never launches other
+// programs or opens browsers — onboarding is the explicit /bifrost-setup command.
+//
+// One opt-in exception: auto-login. When the `auto_login` plugin option (or
+// BIFROST_AUTO_LOGIN=1) is on and no key resolves from any source, a fresh interactive
+// session spawns hooks/auto-setup.cjs detached, which opens the company sign-in page
+// once and caches the returned key. It is gated hard — see autoLoginDecision — so a
+// headless run, a /clear, a recent failed attempt or a parallel session never opens a
+// browser. Off by default in the public plugin.
 //
 // One deliberate exception exists elsewhere: session-reflect.cjs creates
 // <project>/.bifrost/ for the candidate spool. That is in-workspace on purpose —
@@ -677,9 +684,16 @@ function emitCollisionNotice() {
   );
 }
 
-function emitStaleNotice(file, cache, disc) {
+function emitStaleNotice(file, cache, disc, signingIn) {
   const { url, vk } = gw.env();
   if (!url || !vk) {
+    if (signingIn) {
+      process.stdout.write(
+        '\n🔑 Bifrost: a browser window opened for company sign-in. Once it says ' +
+        'connected, run `/mcp` and reconnect bifrost, or restart Claude Code.\n'
+      );
+      return;
+    }
     process.stdout.write(
       '\n⚠️ Bifrost is not configured for hooks: no gateway URL/key found in the ' +
       'environment or in ~/.claude.json. Skill, memory and tool discovery are ' +
@@ -754,6 +768,103 @@ function spawnRefresh(file) {
   } catch (_) {}
 }
 
+// ---------------------------------------------------------------------------
+// Opt-in auto-login
+// ---------------------------------------------------------------------------
+// Opening a browser from a hook is intrusive, so every gate below has to pass, and the
+// decision is a pure function so each one is tested on its own.
+//
+// Headless detection is empirical, not guessed (Claude Code 2.1.293, clean env):
+// an interactive `claude` exports CLAUDE_CODE_SESSION_ATTENDED=1 and
+// CLAUDE_CODE_ENTRYPOINT=cli to hooks, while `claude -p` exports
+// CLAUDE_CODE_SESSION_ATTENDED=0 and CLAUDE_CODE_ENTRYPOINT=sdk-cli. Any one negative
+// signal counts as headless, and CI being set does too. The positive signal is
+// deliberately NOT `entrypoint === 'cli'`: Claude Desktop is interactive and reports
+// its own entrypoint.
+const AUTO_LOGIN_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const AUTO_LOGIN_LOCK_STALE_MS = 2 * 60 * 1000;
+const AUTO_LOGIN_ATTEMPT = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login-attempt.json');
+const AUTO_LOGIN_LOCK = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login.lock');
+
+// The option is read through gw.pluginOption so a mirror that ships `default: true`
+// takes effect even for users who never opened the config dialog.
+function autoLoginEnabled(env = process.env) {
+  const on = (v) => /^(1|true|yes)$/i.test(String(v || '').trim());
+  return on(env.BIFROST_AUTO_LOGIN) || on(gw.pluginOption('auto_login', env));
+}
+
+function isHeadless(env = process.env) {
+  if ((env.CI || '').trim()) return true;
+  if (env.CLAUDE_CODE_SESSION_ATTENDED === '0') return true;
+  if (/^sdk/i.test(env.CLAUDE_CODE_ENTRYPOINT || '')) return true;
+  return false;
+}
+
+// Returns 'go' or the reason not to. `lastAttemptAt` / `lockAt` are epoch ms or null.
+function autoLoginDecision({ enabled, hasKey, headless, source, lastAttemptAt, lockAt, now = Date.now() }) {
+  if (!enabled) return 'disabled';
+  if (hasKey) return 'has-key';
+  if (headless) return 'headless';
+  if (source !== 'startup') return 'not-startup';
+  if (Number.isFinite(lastAttemptAt) && now - lastAttemptAt < AUTO_LOGIN_COOLDOWN_MS) return 'cooldown';
+  if (Number.isFinite(lockAt) && now - lockAt < AUTO_LOGIN_LOCK_STALE_MS) return 'in-flight';
+  return 'go';
+}
+
+// Null when the file is absent. A file that exists but does not parse reads as epoch 0,
+// i.e. long expired, so a torn write can never wedge the lock shut.
+function readAt(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch (_) { return null; }
+  try {
+    const at = JSON.parse(raw).at;
+    return Number.isFinite(at) ? at : 0;
+  } catch (_) { return 0; }
+}
+
+// Decide, take the lock, record the attempt, spawn. True only when a browser is on its
+// way. The lock is created with O_EXCL so two sessions starting in the same instant
+// cannot both win; a lock older than AUTO_LOGIN_LOCK_STALE_MS (worker killed) is
+// replaced. The worker releases it on exit and clears the attempt marker on success.
+function maybeStartAutoLogin(input) {
+  const now = Date.now();
+  const lockAt = readAt(AUTO_LOGIN_LOCK);
+  const decision = autoLoginDecision({
+    enabled: autoLoginEnabled(),
+    hasKey: !!gw.env().vk,
+    headless: isHeadless(),
+    source: input && input.source,
+    lastAttemptAt: readAt(AUTO_LOGIN_ATTEMPT),
+    lockAt,
+    now,
+  });
+  if (decision !== 'go') return false;
+  try {
+    fs.mkdirSync(path.dirname(AUTO_LOGIN_LOCK), { recursive: true });
+    if (lockAt !== null) { try { fs.unlinkSync(AUTO_LOGIN_LOCK); } catch (_) {} } // stale
+    fs.writeFileSync(AUTO_LOGIN_LOCK, JSON.stringify({ pid: process.pid, at: now }), { flag: 'wx' });
+    fs.writeFileSync(AUTO_LOGIN_ATTEMPT, JSON.stringify({ at: now }), 'utf8');
+    spawn(
+      process.execPath,
+      [path.join(__dirname, 'auto-setup.cjs')],
+      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
+    ).unref();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function readStdin(ms) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const timer = setTimeout(() => resolve(Buffer.concat(chunks).toString('utf8')), ms);
+    process.stdin.on('data', (c) => chunks.push(c));
+    process.stdin.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf8')); });
+    process.stdin.on('error', () => { clearTimeout(timer); resolve(''); });
+  });
+}
+
 // stdout writes to a pipe are synchronous on Linux/macOS but ASYNCHRONOUS on Windows,
 // and process.exit() does not drain pending writes. This hook emits ~9KB, well past
 // the point where a partial write is plausible, and the plugin does target Windows
@@ -767,8 +878,24 @@ function exitWhenFlushed() {
   } catch (_) { process.exit(0); }
 }
 
+// The hook input (and with it `source`) is only read when auto-login could actually
+// fire. Every other session — in particular any session with a key — takes exactly the
+// synchronous path it always has, without touching stdin.
 function main() {
+  let wantsInput = false;
+  try { wantsInput = autoLoginEnabled() && !isHeadless() && !gw.env().vk; } catch (_) {}
+  if (!wantsInput) return run(null);
+  readStdin(300).then((raw) => {
+    let input = null;
+    try { input = JSON.parse(raw); } catch (_) {}
+    run(input);
+  }, () => run(null));
+}
+
+function run(input) {
   try {
+    let signingIn = false;
+    if (input) { try { signingIn = maybeStartAutoLogin(input); } catch (_) {} }
     emitEndpointMigrationNotice();
     emitContext();
     // Verified-at-write-time config, straight off disk. No network, so a slow or dead
@@ -801,7 +928,7 @@ function main() {
     try { emitMemory(cache, cfg, use, refreshing); } catch (_) {}
     try { emitKb(cache, cfg, refreshing); } catch (_) {}
     try { emitConfigNotice(); } catch (_) {}
-    try { emitStaleNotice(file, cache, disc); } catch (_) {}
+    try { emitStaleNotice(file, cache, disc, signingIn); } catch (_) {}
     try { emitCollisionNotice(); } catch (_) {}
     spawnRefresh(file);
   } catch (_) { /* silent-fail — never block session start */ }
@@ -811,4 +938,4 @@ function main() {
 if (require.main === module) main();
 
 // Exported so tests drive the real implementation rather than a copy of it.
-module.exports = { cacheFile, safeUrl, projectQuery };
+module.exports = { cacheFile, safeUrl, projectQuery, autoLoginDecision, autoLoginEnabled, isHeadless };

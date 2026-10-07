@@ -57,6 +57,9 @@ test('.mcp.json keeps the exact bifrost server shape (name, transport, userConfi
         type: 'http',
         url: '${user_config.gateway_url}',
         headers: { 'x-bf-vk': '${user_config.virtual_key}' },
+        // 1.8.0: dynamic header from the auto-login key cache. Prints {} when there is
+        // no cached key, which leaves the static header above in charge.
+        headersHelper: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/vk-headers.cjs"',
         oauth: {
           authServerMetadataUrl: 'https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration',
           clientId: '${user_config.oauth_client_id}',

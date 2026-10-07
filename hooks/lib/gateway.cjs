@@ -18,6 +18,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const keyCache = require('./key-cache.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DISCOVERY_CACHE = path.join(CACHE_DIR, 'discovery.json');
@@ -112,6 +113,30 @@ function readCredentialFromMcpConfig() {
   return null;
 }
 
+// A plugin option as hooks see it. Claude Code exports CLAUDE_PLUGIN_OPTION_<KEY> only
+// for values the user actually saved: verified on 2.1.293, a userConfig `default`
+// is substituted into .mcp.json's ${user_config.*} but never reaches the hook
+// environment. So an org-pushed install where nobody opened the config dialog sees no
+// gateway_url and no auto_login at all, and the manifest default has to be read here.
+// An empty saved value counts as unset, matching how .mcp.json treats it.
+const PLUGIN_MANIFEST = path.join(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
+let manifestDefaults;
+
+function pluginOption(key, envVars = process.env) {
+  const v = envVars[`CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}`];
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (manifestDefaults === undefined) {
+    manifestDefaults = {};
+    try {
+      const uc = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8')).userConfig || {};
+      for (const [k, o] of Object.entries(uc)) {
+        if (o && o.default !== undefined && o.default !== null) manifestDefaults[k] = String(o.default);
+      }
+    } catch (_) {}
+  }
+  return manifestDefaults[key] || '';
+}
+
 // A gateway URL and the key that authenticates to it are ONE credential. Resolving
 // them independently would let a stale `export BIFROST_URL=…` in a shell profile pair
 // with the key from ~/.claude.json and send that key to a host it was never issued
@@ -139,6 +164,16 @@ function env() {
   if (optUrl && optVk) return { url: optUrl, vk: optVk };
   const cfg = credentialFromMcpConfig();
   if (cfg) return cfg;
+  // Last resort: the key the opt-in auto-login flow cached (see key-cache.cjs). Every
+  // explicit source above wins over it. The cache records which gateway the key was
+  // issued for, so the pairing rule still holds: when a gateway URL is known on its
+  // own (a lone BIFROST_URL, or the plugin's gateway_url option or its manifest
+  // default), the cached key is used only if it belongs to that same endpoint.
+  const cached = keyCache.read();
+  if (cached) {
+    const known = url || pluginOption('gateway_url');
+    if (!known || sameEndpoint(known, cached.url)) return { url: cached.url, vk: cached.vk };
+  }
   return { url: '', vk: '' };
 }
 
@@ -491,6 +526,7 @@ function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
 
 module.exports = {
   env,
+  pluginOption,
   isIdentifier,
   getCapabilities,
   callCapability,

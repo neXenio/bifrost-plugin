@@ -6,6 +6,7 @@
       "headers": {
         "x-bf-vk": "${user_config.virtual_key}"
       },
+      "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/vk-headers.cjs\"",
       "oauth": {
         "authServerMetadataUrl": "https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration",
         "clientId": "${user_config.oauth_client_id}",

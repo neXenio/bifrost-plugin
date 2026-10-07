@@ -1,6 +1,6 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skill discovery, agent-driven memory, one-command onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
   "author": {
     "name": "neXenio GmbH",
@@ -23,6 +23,17 @@
       "type": "string",
       "title": "OAuth client ID (optional)",
       "description": "Only needed when signing in with your company account and your identity provider does not allow Claude to register itself. Ask your gateway operator for the client ID to paste here."
+    },
+    "auto_login": {
+      "type": "boolean",
+      "title": "Sign in automatically",
+      "description": "When no virtual key is set, open your browser once at startup for company sign-in and fetch your key automatically. The key is cached on this machine only.",
+      "default": false
+    },
+    "keyapp_url": {
+      "type": "string",
+      "title": "Key page URL (optional)",
+      "description": "Where sign-in fetches your key. Leave empty to use the gateway's own host."
     }
   }
 }

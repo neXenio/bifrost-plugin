@@ -5,8 +5,8 @@ description: Set up the Bifrost MCP gateway. Install the plugin and verify memor
 # /bifrost-setup
 
 Set up a Bifrost MCP gateway and confirm memory and skill discovery are live.
-This command is the ONLY place onboarding runs. The plugin never launches
-setup on its own.
+This command is where onboarding runs. The plugin only launches sign-in on
+its own when the opt-in `auto_login` option is on (see below).
 
 ## Primary path: install the plugin
 
@@ -23,6 +23,13 @@ Installing prompts for the plugin's three config values:
 - **OAuth client ID** (`oauth_client_id`, optional): only needed if your
   identity provider does not let Claude register itself. Ask your gateway
   operator for it.
+- **Sign in automatically** (`auto_login`, default off): when no key is set,
+  the first interactive session opens your browser for company sign-in and
+  caches the key it gets back in `~/.cache/bifrost-plugin/vk`. Afterwards run
+  `/mcp` and reconnect `bifrost`, or restart. `BIFROST_AUTO_LOGIN=1` does the
+  same from the shell.
+- **Key page URL** (`keyapp_url`, optional): where sign-in fetches the key.
+  Empty means the gateway's own host.
 
 The bundled `.mcp.json` reads these back as `${user_config.gateway_url}` and so
 on, so no separate registration step is needed. Change any value later with
@@ -60,15 +67,16 @@ bifrost "$BIFROST_URL" --header "x-bf-vk: …"`, and never edits config files
 itself. Without `--key`, the `${BIFROST_VK}` runtime template is stored and the
 key stays only in your shell environment.
 
-If your gateway operator has configured an SSO keyapp (`BIFROST_KEYAPP_URL`),
-you can instead run the browser-based provisioning flow explicitly:
+If your gateway has an SSO keyapp (`BIFROST_KEYAPP_URL` or the `keyapp_url`
+option), you can instead run the browser-based sign-in flow explicitly:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/hooks/auto-setup.cjs"
 ```
 
 It opens the keyapp in your browser, receives your key on a loopback-only,
-nonce-gated listener, and registers the server via `claude mcp add`.
+nonce-gated listener, and caches it for the plugin's `bifrost` server. Then
+run `/mcp` and reconnect `bifrost`, or restart Claude Code.
 
 ## After install
 

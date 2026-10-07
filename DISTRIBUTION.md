@@ -23,10 +23,11 @@ infrastructure, not the plugin.
   phrase, and `BIFROST_REFRESH=0` turns this off entirely. A slow or down
   gateway adds ~0ms to startup.
 - **No side effects outside its own cache.** Hooks write only to
-  `~/.cache/bifrost-plugin/`. Nothing edits Claude Code configuration, launches
-  other programs, or opens browsers — onboarding runs only via the explicit
-  `/bifrost-setup` command. The key header is sent over HTTPS only (loopback
-  excepted for local dev).
+  `~/.cache/bifrost-plugin/`. Nothing edits Claude Code configuration. By
+  default nothing launches other programs or opens browsers, and onboarding
+  runs via the explicit `/bifrost-setup` command. The one exception is the
+  opt-in `auto_login` option (1.8.0, off by default), covered below. The key
+  header is sent over HTTPS only (loopback excepted for local dev).
 - **Self-wiring.** Enabling the plugin registers the `bifrost` MCP server from the
   shipped `.mcp.json`; no installer script required (a `claude mcp add` wrapper
   remains as a fallback for non-plugin installs).
@@ -54,6 +55,16 @@ allowlist it, and provision keys per user (claude.ai web users get their key
 via the gateway's web-user endpoint; CLI users keep `BIFROST_VK` in their
 shell). Existing `vk_…` keys keep working unchanged — the web-user endpoint is
 additive, not an auth migration.
+
+### Auto-login for org-pushed installs (1.8.0)
+
+An org-required plugin arrives with an empty `virtual_key`. In the private
+mirror, set `"default": true` on `auto_login` in `.claude-plugin/plugin.json`
+and, if the keyapp is not on the gateway's host, a `keyapp_url` default. Each
+user's first interactive session then opens company sign-in once, caches the
+key locally and feeds it to the MCP connection through the `headersHelper`.
+Headless runs (`claude -p`, SDK, `CI`) never open a browser, and a failed
+attempt waits 6 hours before retrying.
 
 ## Per-user onboarding (what each engineer does)
 

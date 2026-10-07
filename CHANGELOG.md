@@ -2,6 +2,30 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.8.0] — 2026-10-07
+
+**Opt-in auto-login.** A plugin pushed to a whole org through claude.ai arrives with
+no virtual key, because nobody filled in the install prompt. With the new
+`auto_login` option on, the first interactive session that finds no key anywhere
+opens the company sign-in page once, receives the key over the existing loopback
+callback, and caches it in `~/.cache/bifrost-plugin/vk` (0600, stored together with
+the gateway URL it belongs to). Off by default here; an internal mirror can ship it
+on.
+
+- The MCP connection picks the key up through a new `headersHelper`
+  (`hooks/vk-headers.cjs`). It prints `{}` when there is no cached key, so a key set
+  by hand in `virtual_key` keeps working through the static header.
+- The hooks read the cache as their last source, after env vars, plugin options and
+  `~/.claude.json`. A cached key is only used with the gateway it was issued for.
+- The browser only opens on a `startup` session that is not headless (`claude -p`,
+  the SDK and `CI` are skipped), at most once per 6 hours, and never from two
+  sessions at once. Session start stays non-blocking.
+- `auto-setup.cjs` now writes the key cache instead of running `claude mcp add`,
+  which registered a second `bifrost` server next to the plugin's own one. On macOS
+  it opens Chrome when installed, the default browser otherwise.
+- New options: `auto_login` (boolean, default false) and `keyapp_url` (defaults to the
+  gateway's own host when auto-login is on). `BIFROST_AUTO_LOGIN=1` also turns it on.
+
 ## [1.7.3] — 2026-08-19
 
 **Weak recall is no longer injected, and the section may now be empty.** Measured
