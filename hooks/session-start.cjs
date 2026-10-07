@@ -867,13 +867,20 @@ function takeLock(lockAt, token, now) {
 // way. The lock is created with O_EXCL so two sessions starting in the same instant
 // cannot both win; a lock older than AUTO_LOGIN_LOCK_STALE_MS (worker killed) is
 // replaced. The worker releases it on exit and clears the attempt marker on success.
+function hasCachedKeyForPlugin() {
+  const cached = keyCache.read();
+  return !!(cached && gw.sameEndpoint(cached.url, setup.gatewayUrl()));
+}
+
 function maybeStartAutoLogin(input) {
   const now = Date.now();
   const lockAt = readAt(AUTO_LOGIN_LOCK);
   const attempt = readMarker(AUTO_LOGIN_ATTEMPT);
   const decision = autoLoginDecision({
     enabled: autoLoginEnabled(),
-    hasKey: !!gw.env().vk,
+    // A cached key for the plugin's own gateway counts even when a stale lone
+    // BIFROST_URL keeps env() from pairing with it; otherwise every start would re-login.
+    hasKey: !!gw.env().vk || hasCachedKeyForPlugin(),
     headless: isHeadless(),
     remote: isRemote(),
     source: input && input.source,

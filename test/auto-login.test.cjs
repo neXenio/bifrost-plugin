@@ -322,10 +322,10 @@ test('session-start: headless, /clear, Cowork, remote or disabled never trigger'
   }
 });
 
-test('session-start: an http or missing keyapp neither announces a browser nor burns the cooldown', () => {
+test('session-start: an http keyapp (explicit or derived from the gateway) neither announces a browser nor burns the cooldown', () => {
   for (const env of [
     { CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_KEYAPP_URL: 'http://keyapp.example.invalid' },
-    { CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_KEYAPP_URL: '', BIFROST_URL: 'http://no-browser.example.invalid/mcp' },
+    { CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_KEYAPP_URL: '', CLAUDE_PLUGIN_OPTION_GATEWAY_URL: 'http://no-browser.example.invalid/mcp' },
   ]) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
     const r = runSessionStart(env, home);
@@ -335,6 +335,16 @@ test('session-start: an http or missing keyapp neither announces a browser nor b
     assert.ok(!fs.existsSync(attemptFile(home)));
     assert.ok(!fs.existsSync(path.join(home, '.cache', 'bifrost-plugin', 'auto-login.lock')));
   }
+});
+
+test('session-start: a cached key for the plugin gateway blocks re-login even under a stale lone BIFROST_URL', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-ss-'));
+  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'vk'), JSON.stringify({ url: GW, vk: 'vk_cached', at: 1 }));
+  const r = runSessionStart({ CLAUDE_PLUGIN_OPTION_AUTO_LOGIN: 'true', BIFROST_URL: 'https://stale.example.invalid/mcp' }, home);
+  assert.doesNotMatch(r.stdout, NOTICE);
+  assert.ok(!fs.existsSync(attemptFile(home)));
 });
 
 test('session-start: with a key configured, output is identical whether auto-login is on or off', () => {
@@ -415,6 +425,24 @@ test('worker: a successful sign-in caches the key and drops only this plugin\'s 
   const cached = JSON.parse(fs.readFileSync(path.join(home, '.cache', 'bifrost-plugin', 'vk'), 'utf8'));
   assert.strictEqual(cached.vk, 'vk_from_signin');
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(needsAuth, 'utf8')), { 'plugin:other:x': { timestamp: 2 } });
+});
+
+test('worker: a stale lone BIFROST_URL never decides where the key is cached', async () => {
+  const setup = require('../hooks/auto-setup.cjs');
+  assert.strictEqual(setup.gatewayUrl({ BIFROST_URL: 'https://stale.example.test/mcp' }), GW);
+  assert.strictEqual(setup.gatewayUrl({ BIFROST_URL: 'https://paired.example.test/mcp', BIFROST_VK: 'vk' }), 'https://paired.example.test/mcp');
+  assert.strictEqual(setup.gatewayUrl({ CLAUDE_PLUGIN_OPTION_GATEWAY_URL: 'https://opt.example.test/mcp' }), 'https://opt.example.test/mcp');
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-worker-'));
+  try { fs.unlinkSync(SHIM_LOG); } catch (_) {}
+  const exited = startWorker(home, { BIFROST_URL: 'https://stale.example.test/mcp', BIFROST_SETUP_TIMEOUT_MS: '8000' });
+  const line = await waitFor(() => { try { return fs.readFileSync(SHIM_LOG, 'utf8'); } catch (_) { return ''; } });
+  const cb = new URL(decodeURIComponent(line.match(/cb=([^\s]+)/)[1]));
+  cb.searchParams.set('vk', 'vk_n2');
+  await new Promise((resolve) => require('http').get(cb, (res) => { res.resume(); resolve(); }));
+  await exited;
+  const cached = JSON.parse(fs.readFileSync(path.join(home, '.cache', 'bifrost-plugin', 'vk'), 'utf8'));
+  assert.strictEqual(cached.url, GW, 'cached for the plugin gateway, not the stale export');
 });
 
 test('worker: a timeout shortens the cooldown of an automatic attempt to 30 min', async () => {

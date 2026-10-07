@@ -56,8 +56,13 @@ function autoLoginEnabled() {
 
 // Options go through pluginOption: hooks only see values the user saved, so the
 // manifest defaults (the shipped gateway_url in particular) are read from plugin.json.
-function gatewayUrl() {
-  return (process.env.BIFROST_URL || pluginOption('gateway_url')).trim();
+// The key is cached for the URL the plugin's MCP server uses. BIFROST_URL counts only
+// together with BIFROST_VK, the pairing rule gateway.cjs env() applies: a lone, stale
+// export must never decide where a fresh key may be sent.
+function gatewayUrl(env = process.env) {
+  const url = (env.BIFROST_URL || '').trim();
+  if (url && (env.BIFROST_VK || '').trim()) return url;
+  return pluginOption('gateway_url', env).trim();
 }
 
 function keyappBase(gateway) {
