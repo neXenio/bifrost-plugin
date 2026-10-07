@@ -82,15 +82,12 @@ plugin install itself is the setup: there is no separate registration step.
    sidebar) → Plugins → Browse plugins → Add from a repository.
 2. At the install prompt, fill in the gateway URL (keep the default unless
    the operator gave you a different one) and paste the `vk_...` virtual key
-   the operator issued you. Leave the OAuth client ID field empty unless told
-   otherwise.
+   the operator issued you.
 3. Verify: gateway tools appear in Desktop after install.
 
-Leaving the virtual key blank tries OAuth instead, and that path does not
-fully work yet without an operator-issued OAuth client ID. Even with one, the
-identity provider still needs to allow the redirect URI
-`http://localhost:51789/callback`. Recommend a virtual key for now; point to
-`/bifrost-debug` for the exact errors if the user wants to try OAuth anyway.
+Leaving the virtual key blank needs the opt-in `auto_login` option, which
+fetches the key through company sign-in. The plugin ships no OAuth config
+since 1.8.0.
 
 If login succeeds but requests fail with `no_virtual_key`, the operator has
 not mapped the user's identity to a virtual key yet. Ask them to add the user.

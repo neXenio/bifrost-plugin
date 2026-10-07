@@ -15,9 +15,9 @@
 
 The plugin ships its own `.mcp.json`, so enabling it registers the `bifrost`
 MCP server automatically, no installer needed. The install prompt collects
-the gateway URL and a virtual key. Leaving the key blank tries OAuth
-instead, which needs a client ID from your gateway operator before it works
-(see the README). Claude Code uses whatever you enter directly, so no shell
+the gateway URL and a virtual key. Leaving the key blank needs the opt-in
+`auto_login` option, which fetches the key through company sign-in (see the
+README). Claude Code uses whatever you enter directly, so no shell
 setup is required for the MCP connection itself.
 
 The hooks (memory recall, skill-discovery hints, usage tracking) read the
@@ -61,9 +61,8 @@ button. The first visit creates it, later visits show the same one. Your
 sign-in address has to be on `luca-app.de` or `nexenio.com`, otherwise you
 get `403 domain not permitted` after logging in.
 
-Leaving the key blank tries OAuth instead, which needs a pre-registered
-client ID from your gateway operator before it completes (see
-[Virtual key or OAuth](README.md#virtual-key-or-oauth) in the README).
+Leaving the key blank needs the opt-in `auto_login` option instead (see
+[Virtual key or sign-in](README.md#virtual-key-or-sign-in) in the README).
 
 Hooks and subagents run in the Code and Cowork tabs. On the Chat tab and on
 claude.ai web they do not, so skills, slash commands, and the gateway's MCP

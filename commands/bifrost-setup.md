@@ -14,15 +14,11 @@ CLI: `/plugin marketplace add neXenio/bifrost-plugin` then `/plugin install
 bifrost-plugin`. On Desktop and claude.ai, see the per-surface install steps
 in the `bifrost-onboard` skill.
 
-Installing prompts for the plugin's three config values:
+Installing prompts for the plugin's config values:
 
 - **Gateway URL** (`gateway_url`): defaults to the shared gateway.
 - **Virtual key** (`virtual_key`, optional): paste the `vk_...` key your
-  gateway operator issued you. Leave it blank to sign in with your company
-  account through OAuth instead.
-- **OAuth client ID** (`oauth_client_id`, optional): only needed if your
-  identity provider does not let Claude register itself. Ask your gateway
-  operator for it.
+  gateway operator issued you. Leave it blank to use auto-login instead.
 - **Sign in automatically** (`auto_login`, default off): when no key is set,
   the first interactive session opens your browser for company sign-in and
   caches the key it gets back in `~/.cache/bifrost-plugin/vk`. Afterwards run

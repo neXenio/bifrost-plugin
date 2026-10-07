@@ -25,6 +25,14 @@ on.
   it opens Chrome when installed, the default browser otherwise.
 - New options: `auto_login` (boolean, default false) and `keyapp_url` (defaults to the
   gateway's own host when auto-login is on). `BIFROST_AUTO_LOGIN=1` also turns it on.
+- **Removed: the `oauth` block in `.mcp.json` and the `oauth_client_id` option.**
+  Claude Code 2.1.293 never substitutes `${user_config.*}` inside `oauth`, even when
+  the option is saved, so Keycloak always received the literal placeholder as
+  `client_id`. It only added a second, broken sign-in path (`/mcp` → Authenticate)
+  next to the key. A saved `oauth_client_id` value is now ignored.
+- The installer moved from `bin/install.js` to `scripts/install.js`: claude.ai
+  organization sync rejects a plugin with a top-level `bin/`. The npm
+  `bifrost-plugin-install` command is unchanged.
 
 ## [1.7.3] — 2026-08-19
 

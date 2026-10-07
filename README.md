@@ -83,11 +83,10 @@ Rotate button if it ever leaks. Your sign-in address has to be on
 permitted` after an otherwise successful login.
 
 That is the whole install for someone who does not use a terminal: get the
-key, add the plugin, paste the key. See below for the OAuth alternative,
-which would remove the key step entirely but needs one change on the
-identity provider first.
+key, add the plugin, paste the key. The opt-in `auto_login` option removes the
+paste step by fetching the key through company sign-in.
 
-### Virtual key or OAuth
+### Virtual key or sign-in
 
 The virtual key (`vk_...`, self-served from
 [https://bifrost.culture4.life/](https://bifrost.culture4.life/)) is the auth
@@ -95,43 +94,14 @@ path that works today, on every surface, with nothing set in your shell.
 Paste it into the `virtual_key` field at install time and the MCP connection
 is live.
 
-Leaving `virtual_key` blank falls back to OAuth 2.1 against the company
-Keycloak, and that part of the plugin's `.mcp.json` is wired up
-(`authServerMetadataUrl` points at Keycloak, `callbackPort` is pinned to
-`51789`), but the flow does not complete on its own yet. Verified end to end
-with a real plugin install:
-
-- `GET /.well-known/oauth-protected-resource` returns 200 with
-  `authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]`, and
-  `POST /mcp` with no key returns 401 with the matching `WWW-Authenticate`
-  challenge, so the gateway side is correct.
-- A wrong key returns a 401 with no `WWW-Authenticate` header, so a bad key
-  does not fall back to OAuth. Clear the `virtual_key` field rather than
-  leaving a bad one in it.
-- With `virtual_key` and `oauth_client_id` both blank, Claude reaches the
-  Keycloak realm and then fails: `Policy 'Trusted Hosts' rejected request to
-  client-registration service. Details: Host not trusted.` The realm blocks
-  dynamic client registration. (Without the `authServerMetadataUrl` override,
-  the failure comes even earlier: `Incompatible auth server: does not
-  support dynamic client registration`, because the default authorization
-  server metadata has no `registration_endpoint`.)
-- With an `oauth_client_id` filled in, Claude reaches `Needs authentication`,
-  the healthy state that offers the browser login.
-
-So today, OAuth needs one more piece from your gateway operator: either the
-Keycloak realm's Trusted Hosts policy has to permit loopback client
-registration, or the operator pre-registers a public client and hands out
-its client ID for the `oauth_client_id` field. Until one of those is done,
-use the virtual key.
-
-> For gateway operators: a pre-registered client's redirect URI must be
-> exactly `http://localhost:51789/callback`, matching the `callbackPort`
-> pinned in `.mcp.json`.
-
-Once OAuth logs you in, the gateway maps your Keycloak identity to your
-personal virtual key server-side, so budgets and rate limits still apply. If
-you can log in but get `no_virtual_key`, ask the gateway operator to add you
-to the VK map.
+With `auto_login` on and `virtual_key` blank, the first interactive session
+opens the company sign-in page once and caches the key it gets back in
+`~/.cache/bifrost-plugin/vk`. The plugin no longer ships an `oauth` block in
+`.mcp.json` (removed in 1.8.0): Claude Code never substituted
+`${user_config.oauth_client_id}` inside it, so Keycloak always received the
+literal placeholder, and it offered a second, broken sign-in path next to the
+working one. A wrong key returns a 401 with no `WWW-Authenticate` header;
+clear the `virtual_key` field rather than leaving a bad one in it.
 
 ### Legacy fallback: Desktop local proxy
 

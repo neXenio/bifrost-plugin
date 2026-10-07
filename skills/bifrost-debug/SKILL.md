@@ -20,8 +20,8 @@ If missing: `export BIFROST_URL=https://<your-gateway-host>/mcp` and
 `export BIFROST_VK=vk_<your-key>` (add both to `~/.zshrc` or `~/.bashrc`).
 
 On Desktop and claude.ai there is no shell, so this check does not apply.
-Credentials come from the plugin's three install-time config values
-(`gateway_url`, `virtual_key`, `oauth_client_id`). Run `/plugin configure` to
+Credentials come from the plugin's install-time config values
+(`gateway_url`, `virtual_key`, and the opt-in `auto_login`). Run `/plugin configure` to
 view or change them.
 
 Symptom if the key is wrong/missing: 401 or 403 from every bifrost tool call.
@@ -186,12 +186,10 @@ identity-provider-side failures before login even starts.
    ```
    No `registration_endpoint` in the response is why dynamic client
    registration fails. See the symptom map below for the exact error text.
-3. **Supplying an OAuth client ID** (the plugin's third config field, or
-   `/plugin configure`) skips self-registration and reaches a healthy "Needs
-   authentication" state. Completing the browser login from there still needs
-   the identity provider to allow the redirect URI
-   `http://localhost:51789/callback` for that client. Confirm this with your
-   gateway operator before assuming the client ID itself is wrong.
+3. **The plugin no longer ships an OAuth client ID option** (removed in 1.8.0:
+   Claude Code never substituted it, Keycloak received the literal
+   placeholder). In `/mcp`, do not pick `Authenticate` for the plugin's
+   bifrost server; use a virtual key or `auto_login` and pick `Reconnect`.
 4. **After a successful login**, the gateway maps the authenticated identity
    to a personal virtual key server-side. `no_virtual_key` at that point means
    the operator has not added you to that map yet.
@@ -214,7 +212,6 @@ client ID field.
 | Literal `${BIFROST_URL}` or `${BIFROST_VK}` shows up as a server URL or header value | Plugin version before 1.5.0 running on a surface with no shell environment (Desktop, claude.ai), so the placeholder is never resolved | Update to bifrost-plugin 1.5.0 or later |
 | `Incompatible auth server: does not support dynamic client registration` | Gateway's `/.well-known/oauth-authorization-server` has no `registration_endpoint` | Identity-provider side. Use a virtual key, or ask the operator for an OAuth client ID (step 9.3) |
 | `Policy 'Trusted Hosts' rejected request to client-registration service. Details: Host not trusted.` | Keycloak's realm Trusted Hosts policy blocks direct client registration | Identity-provider side. Ask the operator to relax Trusted Hosts for loopback, or provide a client ID |
-| Desktop: stuck at "Needs authentication" after entering an OAuth client ID | Identity provider has not allowlisted `http://localhost:51789/callback` as a redirect URI for that client | Operator: add the redirect URI to the client |
 | Desktop: `no_virtual_key` after a successful login | Authenticated but not yet in the gateway's VK map | Operator: assign the user a virtual key |
 | Permission prompt on every gateway tool | Normal Claude Code behaviour — no rule pre-approves the server | Add `"mcp__plugin_bifrost-plugin_bifrost"` (and/or `"mcp__bifrost"`) to `permissions.allow` in `~/.claude/settings.json`. The plugin cannot ship this: a plugin manifest may only carry `agent` and `subagentStatusLine` settings, and a `permissions` block there validates but is dropped at load |
 | Tool exists on the gateway but not in your tool list | Server is code-mode, not flat | Call it via `executeToolCode`; `listToolFiles()` to discover. See `/bifrost-code-mode` |

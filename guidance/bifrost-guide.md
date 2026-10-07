@@ -73,17 +73,15 @@ Claude Desktop installs the plugin itself rather than reading a project's
 `.mcp.json`. Code tab: `+` button next to the prompt box → Plugins → Add
 plugin. Chat and Cowork tabs, and claude.ai web: Customize (left sidebar) →
 Plugins → Browse plugins → Add from a repository. Either path prompts for the
-same three config values as the CLI (gateway URL, virtual key, OAuth client
-ID), and the bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
+same config values as the CLI (gateway URL, virtual key, auto-login), and the
+bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
 and so on. There is no separate env-var step.
 
-Leaving the virtual key blank falls back to OAuth against the identity
-provider named in the plugin's OAuth config. That path does not fully work
-yet: without an OAuth client ID, registration fails outright, and even with an
-operator-issued client ID the identity provider still needs to allow the
-loopback redirect URI before login can finish. Use a virtual key until your
-gateway operator confirms OAuth is ready. See `/bifrost-debug` for the exact
-errors. For installs that cannot use the plugin at all, see README → Legacy
+Leaving the virtual key blank leaves the server unauthenticated unless
+`auto_login` fetches a key through company sign-in. Since 1.8.0 the plugin
+ships no OAuth config: Claude Code never filled in its client ID, so that path
+could not complete. Use a virtual key or auto-login. See `/bifrost-debug` for
+the exact errors. For installs that cannot use the plugin at all, see README → Legacy
 fallback: Desktop local proxy.
 
 ## Hooks

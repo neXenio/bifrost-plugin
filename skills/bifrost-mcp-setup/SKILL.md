@@ -76,16 +76,12 @@ Plugins → Browse plugins → Add from a repository.
 
 Either path prompts for the gateway URL (keep the default unless your operator
 gave you a different one), a virtual key (paste the `vk_...` key your operator
-issued you), and an OAuth client ID (leave empty unless told otherwise, see
-below). Change any of these later with `/plugin configure`.
+issued you), and the opt-in `auto_login` switch. Change any of these later
+with `/plugin configure`.
 
-Signing in with a company account instead of a virtual key does not fully work
-yet. With no client ID, Claude's OAuth discovery fails outright. With an
-operator-issued client ID it gets as far as a healthy "Needs authentication"
-state, but completing login still needs the identity provider to allow the
-redirect URI `http://localhost:51789/callback` for that client. Use a virtual
-key until your gateway operator confirms OAuth is ready. See `/bifrost-debug`
-step 9 for the exact errors and their causes.
+Without a virtual key, `auto_login` fetches one through company sign-in. The
+plugin ships no OAuth config since 1.8.0 (Claude Code never filled in its
+client ID). See `/bifrost-debug` step 9.
 
 ### Legacy fallback: local `mcp-remote` proxy
 
