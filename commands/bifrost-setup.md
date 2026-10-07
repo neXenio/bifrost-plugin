@@ -88,9 +88,9 @@ run `/mcp` → `bifrost` → Reconnect (not Authenticate), or restart Claude Cod
 ## Verification checklist
 
 - `/plugin` (or `claude mcp list` / `/mcp` on the CLI) shows the `bifrost` server
-- The gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) is reachable (MCP loaded)
+- The gateway's skill-search tool (`mcp__plugin_bifrost-plugin_bifrost__<skills-server>-skill_search`, or `mcp__bifrost__…` with a hand-added server) is reachable (MCP loaded)
 - SessionStart injects bifrost context at the top of each session (CLI and Desktop Code/Cowork only)
-- Memory tools (if your gateway exposes a memory server) are callable via `mcp__bifrost__<memory-server>-search`
+- Memory tools (if your gateway exposes a memory server) are callable via `<prefix><memory-server>-search` (same prefix as above)
 
 ## Troubleshoot
 

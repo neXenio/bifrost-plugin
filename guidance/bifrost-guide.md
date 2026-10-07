@@ -8,7 +8,7 @@ service, etc.) and can serve a shared skill library. Every Claude Code session
 with this plugin enabled gets:
 
 1. **Skill discovery** — non-trivial prompts receive a hint to call the gateway's
-   skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting,
+   skill-search tool (`<prefix><skills-server>-skill_search`) before starting,
    so existing workflows are reused.
 2. **One-command onboarding** — `node scripts/install.js --key vk_…` (or the
    `/bifrost-setup` slash command) wires the MCP entry in seconds.
@@ -96,8 +96,10 @@ The plugin registers five hooks across five Claude Code events:
 | `PostToolUse` | `usage.cjs` (async) | Records which capability classes were used, for successful bifrost tool calls |
 | `PostToolUseFailure` | `usage.cjs` (async) | Same usage recording, for failed bifrost tool calls |
 
-`PostToolUse` and `PostToolUseFailure` both match only calls to
-`mcp__(bifrost|plugin_bifrost-plugin_bifrost)__.*` tools.
+`PostToolUse` and `PostToolUseFailure` both match only gateway tool calls, in all
+three namespaces: `mcp__bifrost__` (hand-added server), `mcp__plugin_<plugin>_bifrost__`
+(this plugin) and `mcp__claude_ai_<Name>__` for a claude.ai connector whose name
+contains "bifrost".
 
 All hooks are silent-fail: any error results in `exit 0` with no output. A
 crashed hook never blocks your session.
@@ -109,10 +111,10 @@ Memory is pull-only and agent-driven. There is no automatic per-prompt injection
 **How to use it:**
 
 1. **Before non-trivial tasks** — call the gateway's memory search tool (typically
-   `mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
+   `<prefix><memory-server>-search`) with a short query to recall relevant
    past decisions, project facts, or context.
 2. **After completing significant work** — call the gateway's memory store tool
-   (typically `mcp__bifrost__<memory-server>-store`) to save durable facts.
+   (typically `<prefix><memory-server>-store`) to save durable facts.
    Include: decisions made, root causes found, conventions learned, gotchas
    discovered. Exclude: transient details, secrets, per-file noise.
 
@@ -135,7 +137,12 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 
 ## Gateway routing reference
 
-Tools are namespaced `mcp__bifrost__<server>-<tool>`. Which servers exist depends
+Tools are namespaced `<prefix><server>-<tool>`, where the prefix depends on how the
+gateway is connected: `mcp__plugin_bifrost-plugin_bifrost__` for this plugin's own
+server, `mcp__bifrost__` for a hand-added `bifrost` server (which hides the plugin's),
+and `mcp__claude_ai_<Name>__` for the claude.ai org connector (e.g.
+`mcp__claude_ai_luca_Bifrost__`; spaces and dots become `_`). The session context
+names the one that applies. Which servers exist depends
 entirely on how your gateway is configured. Run `/mcp` to list them. Typical roles:
 
 | Need | Server role | Notes |

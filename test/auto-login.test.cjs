@@ -523,3 +523,26 @@ test('rpc: a 401 for a key from another source leaves the cache alone', async ()
   assert.strictEqual(keyCache.read().vk, 'vk_cached');
   keyCache.clear();
 });
+
+// ---------------------------------------------------------------------------
+// Tool prefix the hooks print (N3)
+// ---------------------------------------------------------------------------
+
+function prefixIn(claudeJson, env) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-prefix-'));
+  if (claudeJson) fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify(claudeJson));
+  const r = spawnSync(process.execPath, ['-e',
+    `process.stdout.write(require(${JSON.stringify(path.join(ROOT, 'hooks', 'lib', 'gateway.cjs'))}).toolPrefix())`],
+  { env: { PATH: process.env.PATH, HOME: home, CLAUDE_PROJECT_DIR: '/proj', ...env }, encoding: 'utf8' });
+  return r.stdout;
+}
+
+test('toolPrefix: the plugin server by default, legacy name only next to a hand-added bifrost server', () => {
+  const name = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).name;
+  const plugin = { CLAUDE_PLUGIN_ROOT: ROOT };
+  assert.strictEqual(prefixIn(null, plugin), `mcp__plugin_${name}_bifrost__`);
+  assert.strictEqual(prefixIn({ mcpServers: { other: { url: GW } } }, plugin), `mcp__plugin_${name}_bifrost__`);
+  assert.strictEqual(prefixIn({ mcpServers: { bifrost: { url: GW } } }, plugin), 'mcp__bifrost__');
+  assert.strictEqual(prefixIn({ projects: { '/proj': { mcpServers: { bifrost: { url: GW } } } } }, plugin), 'mcp__bifrost__');
+  assert.strictEqual(prefixIn(null, {}), 'mcp__bifrost__', 'outside a plugin install the server is the hand-added one');
+});

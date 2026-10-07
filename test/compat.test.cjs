@@ -82,11 +82,18 @@ test('the usage counter is scoped to gateway tools only, and never blocks one', 
   const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
   for (const evt of ['PostToolUse', 'PostToolUseFailure']) {
     const group = cfg.hooks[evt][0];
-    // A bare server key never matches a plugin-bundled tool, so both spellings are
-    // required: `claude mcp add` produces mcp__bifrost__*, a marketplace install
-    // produces mcp__plugin_bifrost-plugin_bifrost__*.
-    assert.match(group.matcher, /bifrost/, `${evt} must be scoped to gateway tools`);
-    assert.match(group.matcher, /plugin_bifrost-plugin_bifrost/, `${evt} must cover the marketplace spelling`);
+    // A bare server key never matches a plugin-bundled tool, so all three spellings are
+    // required: `claude mcp add` produces mcp__bifrost__*, a plugin install
+    // mcp__plugin_<plugin>_bifrost__*, and the claude.ai org connector "luca Bifrost"
+    // mcp__claude_ai_luca_Bifrost__* (Claude Code turns spaces and dots into `_`).
+    const re = new RegExp(`^(?:${group.matcher})$`);
+    for (const t of ['mcp__bifrost__skills-skill_search', 'mcp__plugin_bifrost-plugin_bifrost__executeToolCode',
+      'mcp__plugin_bifrost-plugin-internal_bifrost__x', 'mcp__claude_ai_luca_Bifrost__memory-memory_search']) {
+      assert.ok(re.test(t), `${evt} must count ${t}`);
+    }
+    for (const t of ['mcp__jira__get_issue', 'mcp__plugin_legal_slack__x', 'mcp__claude_ai_Microsoft_365__authenticate', 'Bash']) {
+      assert.ok(!re.test(t), `${evt} must not count ${t}`);
+    }
     assert.strictEqual(group.hooks[0].async, true, `${evt} must not sit in the tool path`);
   }
 });

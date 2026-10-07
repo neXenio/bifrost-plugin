@@ -64,9 +64,18 @@ function credentialFromMcpConfig() {
   return mcpCredentialCache;
 }
 
+let claudeConfigCache;
+
+function claudeConfig() {
+  if (claudeConfigCache === undefined) {
+    try { claudeConfigCache = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { claudeConfigCache = null; }
+  }
+  return claudeConfigCache;
+}
+
 function readCredentialFromMcpConfig() {
-  let cfg;
-  try { cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { return null; }
+  const cfg = claudeConfig();
+  if (!cfg) return null;
 
   const usable = (s) => {
     if (!s || typeof s !== 'object') return null;
@@ -135,6 +144,23 @@ function pluginOption(key, envVars = process.env) {
     } catch (_) {}
   }
   return manifestDefaults[key] || '';
+}
+
+// The namespace the gateway's tools carry in this session: Claude Code names them
+// mcp__<server>__<tool> with the server name sanitized ([^A-Za-z0-9_-] -> _, read from
+// the 2.1.293 binary). A hand-added `bifrost` server (user scope, or this project's
+// local scope) suppresses the plugin's own as a duplicate and is what env() reads its
+// credential from, so it keeps the legacy name. Otherwise a plugin install exposes
+// plugin:<name>:bifrost. The claude.ai org connector (mcp__claude_ai_<Name>__) cannot be
+// detected from a hook; the guidance names it as the alternative.
+function toolPrefix(envVars = process.env) {
+  const cfg = claudeConfig() || {};
+  const here = (envVars.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  const local = cfg.projects && cfg.projects[here] && cfg.projects[here].mcpServers;
+  const manual = (cfg.mcpServers && cfg.mcpServers.bifrost) || (local && local.bifrost);
+  const name = pluginName();
+  if (manual || !(envVars.CLAUDE_PLUGIN_ROOT || '').trim() || !name) return 'mcp__bifrost__';
+  return `mcp__plugin_${name.replace(/[^A-Za-z0-9_-]/g, '_')}_bifrost__`;
 }
 
 // This plugin's own name from plugin.json — Claude Code keys the plugin's MCP server as
@@ -448,7 +474,7 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
 // by testing the raw string against UNEXPANDED_RE.
 function expandVars(raw) {
   return String(raw == null ? '' : raw).trim()
-    .replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '')
+    .replace(/\$\{([^}]*)\}/g, (_, v) => (typeof process.env[v] === 'string' ? process.env[v] : ''))
     .trim();
 }
 
@@ -548,6 +574,7 @@ module.exports = {
   env,
   pluginOption,
   pluginName,
+  toolPrefix,
   rpc,
   isIdentifier,
   getCapabilities,

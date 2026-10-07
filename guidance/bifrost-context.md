@@ -6,6 +6,7 @@ the tools, skill library, and memory your gateway exposes.
 | Item | Value |
 |------|-------|
 | MCP server | `bifrost` (from the plugin's `.mcp.json`, or user-scope via `claude mcp add`) |
+| Tool prefix | `${BIFROST_TOOL_PREFIX}` (from the claude.ai org connector instead: `mcp__claude_ai_<Name>__`, e.g. `mcp__claude_ai_luca_Bifrost__`; use whichever your tool list has) |
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
@@ -30,8 +31,8 @@ the tools, skill library, and memory your gateway exposes.
 Run `/mcp` to see what loaded. A gateway exposes upstream servers in one of two
 modes, and **the same gateway usually mixes both**:
 
-1. **Flat tools** — callable directly, namespaced `mcp__bifrost__<server>-<tool>`
-   (e.g. `mcp__bifrost__skills-skill_search`).
+1. **Flat tools** — callable directly, namespaced `${BIFROST_TOOL_PREFIX}<server>-<tool>`
+   (e.g. `${BIFROST_TOOL_PREFIX}skills-skill_search`).
 2. **Code-mode** — most servers are *not* flat tools. They are reached through the
    meta-tool **`executeToolCode`**, which runs a short Starlark/Python snippet:
 
@@ -48,7 +49,7 @@ modes, and **the same gateway usually mixes both**:
    nothing. `for`, `if`, list comprehensions and `print()` all work at top level.
    Load the `bifrost-code-mode` skill for the full reference.
 
-If a `mcp__bifrost__<server>-<tool>` tool does not exist, the capability is almost
+If a `${BIFROST_TOOL_PREFIX}<server>-<tool>` tool does not exist, the capability is almost
 certainly code-mode — do **not** give up; use `executeToolCode`.
 
 ## Skills, memory and tools

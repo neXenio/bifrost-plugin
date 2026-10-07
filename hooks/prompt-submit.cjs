@@ -57,8 +57,8 @@ function callFor(caps, toolFn, args) {
   const named = args.map(([k, v]) => `\`${k}=${v}\``).join(', ');
   const tool = gw.flatToolName(caps.skills, toolFn);
   return named
-    ? `\`mcp__bifrost__${tool}\` with ${named}`
-    : `\`mcp__bifrost__${tool}\``;
+    ? `\`${gw.toolPrefix()}${tool}\` with ${named}`
+    : `\`${gw.toolPrefix()}${tool}\``;
 }
 
 // Check the team library first, but do not claim more for it than is true. An earlier

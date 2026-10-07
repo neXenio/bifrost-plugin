@@ -136,7 +136,8 @@ function emitContext() {
     const { url, vk } = gw.env();
     const filled = raw
       .replace(/\$\{BIFROST_URL\}/g, safeUrl(url))
-      .replace(/\$\{BIFROST_VK\}/g, vk ? '(configured)' : '(not configured)');
+      .replace(/\$\{BIFROST_VK\}/g, vk ? '(configured)' : '(not configured)')
+      .replace(/\$\{BIFROST_TOOL_PREFIX\}/g, gw.toolPrefix());
     process.stdout.write(filled);
   } catch (_) {}
 }
@@ -241,7 +242,7 @@ function emitSkills(cache, cfg, use) {
   if (!s || !s.server) return;
   const mode = adaptation(use, 'skills');
   const call = s.mode === 'flat'
-    ? (t) => `mcp__bifrost__${gw.flatToolName(s, t)}`
+    ? (t) => `${gw.toolPrefix()}${gw.flatToolName(s, t)}`
     : (t) => `result = ${s.server}.${t}(...)  (via executeToolCode)`;
   const count = Number.isFinite(s.count) && s.count > 0 ? s.count : null;
   const heading = count
@@ -334,7 +335,7 @@ function emitRoster(disc) {
     `## Bifrost MCP tools — ${total} tools across ${all.length} servers (code mode)`,
     '',
     'These are reachable through `executeToolCode`, NOT as flat tools, so they do not',
-    'appear in your tool list and `mcp__bifrost__<server>-<tool>` does not exist for them.',
+    `appear in your tool list and \`${gw.toolPrefix()}<server>-<tool>\` does not exist for them.`,
     'They are real and callable. If a capability looks missing, check here before',
     'answering from training data or asking the user for something the gateway knows.',
     '',
@@ -506,7 +507,7 @@ function emitMemory(cache, cfg, use, refreshing) {
   if (m.server) {
     const call = m.mode === 'code'
       ? (t) => `result = ${m.server}.${t}(...)  (via executeToolCode)`
-      : (t) => `mcp__bifrost__${gw.flatToolName(m, t)}`;
+      : (t) => `${gw.toolPrefix()}${gw.flatToolName(m, t)}`;
     lines.push(
       'This is team memory: decisions, root causes, conventions and gotchas recorded by',
       'everyone\'s agents. Recall quality depends on how specific your query is, so search',
