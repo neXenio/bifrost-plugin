@@ -5,23 +5,29 @@
 // and allowed to take as long as the backend needs — it runs AFTER the hook
 // exits, so session start never waits on the gateway (which can be slow or down).
 //
-// Usage: node refresh.cjs <cacheFile> <memoryQuery>
-// Writes {at, skills:{server,mode[,count]},
-// memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince]},
+// Usage: node refresh.cjs <cacheFile> --dir <projectDir>   (builds the query via git)
+//        node refresh.cjs <cacheFile> <memoryQuery>         (older session-start; '' = skip)
+// Writes {v, at, skills:{server,mode[,count]},
+// memory:{server,mode,total,facts:[{content,similarity}][,stale,staleSince,head]},
 // kb:{...}} to the cache file. Silent-fail; always exits 0.
+//
+// Session-start fact priming is OFF by default: with BIFROST_MEMORY_PRIME unset (and
+// no signed `memoryPrime` hook field) this worker makes no memory_search call, builds
+// no query and runs no git; the memory section only carries the server/mode that
+// session-start needs to print the recall/store guidance. See CHANGELOG for the
+// measured reason and the criterion for turning it back on.
 //
 // KB recall reuses the same memory server/capability — there is no separate
 // kb-mcp. It is just memory_search scoped to the KB wing (wing=<BIFROST_KB_WING>).
-// No default wing name is assumed: KB recall is skipped entirely unless
-// BIFROST_KB_WING is set, configurable via BIFROST_KB_WING / BIFROST_KB_QUERY.
+// No default wing name is assumed: KB recall is skipped entirely unless priming is on
+// AND BIFROST_KB_WING is set, configurable via BIFROST_KB_WING / BIFROST_KB_QUERY.
 //
 // Sizing is adaptive (env-configurable, all optional):
 //   BIFROST_MEMORY_MAX_FACTS  — cap on injected facts (default 6)
 //   BIFROST_MEMORY_SNIPPET_LEN — base per-fact snippet length in chars (default 180)
 //   BIFROST_INJECT_BUDGET     — total char budget per section (default ~2000,
 //                               ~500 tokens at ~4 chars/token)
-//   BIFROST_MEMORY_MIN_SIM    — drop results below this similarity (default 0, i.e.
-//                               no floor; scores are not comparable across servers)
+//   BIFROST_MEMORY_MIN_SIM    — drop results below this `similarity` (default 0.55)
 //   BIFROST_MEMORY_FAST       — set to 1 to pass fast:true to memory_search
 //                               (server-side fast path; opt-in until the live
 //                               gateway ships the param — an unknown param on a
@@ -49,21 +55,16 @@
 // memory_search alone, and this data already rides along for free on that call.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
+const { projectQuery, headRef } = require('./lib/project-query.cjs');
 
 const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency is free
 const DEFAULT_MAX_FACTS = 6;
 const DEFAULT_SNIPPET_LEN = 180;
 const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
-// No similarity floor by default. Relevance scores are not comparable across memory
-// servers — cosine, dot-product and BM25-fused scores do not share a scale, and this
-// gateway's own measured range (0.381-0.415) sat entirely BELOW the previous 0.45
-// default, so every scored fact was dropped and the memory section silently rendered
-// empty. Ranking plus MAX_FACTS and the char budget already bound what gets injected;
-// a hard threshold on an unknown scale only ever removed good results. Set
-// BIFROST_MEMORY_MIN_SIM if a specific server's scale justifies one.
 // Measured, not guessed. Across 63 local project caches the per-project BEST hit had
 // median 0.563 (p25 0.513, p90 0.635, max 0.767), and 251 of 378 injected facts scored
 // under 0.55 — two thirds of the section was filler, and on several projects every
@@ -72,11 +73,14 @@ const DEFAULT_BUDGET_CHARS = 2000; // ~500 tokens @ ~4 chars/token
 // CORRECT outcome: the corpus holds nothing relevant for them, the section degrades to
 // empty, and the agent is told to search once it knows the task.
 //
-// The earlier 0.45 default was removed because this gateway's scores sat below it and
-// the section rendered empty — read at the time as "the floor is wrong". The data says
-// the retrieval is weak and removing the floor only hid it. A floor plus an honest
-// empty section beats six confident-looking irrelevant facts.
+// Applies to luca-memory's `similarity` field (true cosine); an older server that only
+// returns the RRF `relevance` (~0.016-0.075) never clears it, so nothing is injected.
+// 0.55 comes from a replay of 770 real hook calls: judged precision ~0.82 at 0.55 vs
+// ~0.73 at 0.45.
 const DEFAULT_MIN_SIM = 0.55;
+// Cache schema. v2: facts come from the project query and the private-row exclusion;
+// session-start does not render facts from an older cache.
+const CACHE_SCHEMA = 2;
 const FETCH_K = 12; // fetch wider than MAX_FACTS so budget-fill has a pool to pick from
 // Per warning type, because the three luca-memory actually emits
 // (memory_lib.get_system_warnings: pending_contradictions, stale_memories,
@@ -124,6 +128,38 @@ const USE_FAST = process.env.BIFROST_MEMORY_FAST === '1';
 // 0 disables. 0.9 is deliberately tight: below that, measured recall was mostly filler.
 const RELATIVE_FLOOR = envFloat('BIFROST_MEMORY_RELATIVE_FLOOR', 0.9);
 
+// Rows that must never be injected into a session, whatever they score. Defense in
+// depth: the server is expected to filter these, the client does not rely on it.
+// `source:conversation` and `session:*` tags are deliberately absent: /reflect-all
+// stores legitimate durable facts under them.
+const EXCLUDED_FOR_INJECTION = {
+  wings: ['screenpipe', 'personal'],
+  sourceTypes: ['screenpipe', 'claude-session'],
+  tags: ['session-summary', 'source:screenpipe', 'source:email', 'source:superhuman'],
+  scope: 'private',
+};
+
+// Looks at the RAW item, before formatProvenance folds provenance into content text.
+function isExcludedForInjection(item) {
+  if (!item || typeof item !== 'object') return false;
+  const lower = (v) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
+  const x = EXCLUDED_FOR_INJECTION;
+  const provStr = typeof item.provenance === 'string' ? item.provenance.toLowerCase() : '';
+  const prov = item.provenance && typeof item.provenance === 'object' && !Array.isArray(item.provenance)
+    ? item.provenance : {};
+  const meta = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  if (provStr && [...x.wings.map((w) => `wing=${w}`), `scope=${x.scope}`, 'session-summary']
+    .some((needle) => provStr.includes(needle))) return true;
+  if ([prov.wing, item.wing].some((v) => x.wings.includes(lower(v)))) return true;
+  if (x.sourceTypes.includes(lower(prov.source_type)) || x.sourceTypes.includes(lower(item.source_type))) return true;
+  if ([prov.scope, meta.scope, item.scope].some((v) => lower(v) === x.scope)) return true;
+  // Union, not first-present: a row can carry tags in several places.
+  const tags = [prov.tags, item.tags, meta.tags]
+    .flatMap((t) => (Array.isArray(t) ? t : String(t == null ? '' : t).split(',')))
+    .map(lower);
+  return tags.some((t) => x.tags.includes(t));
+}
+
 function clean(s) {
   return String(s).replace(/\s+/g, ' ').trim();
 }
@@ -142,9 +178,32 @@ function formatProvenance(provenance) {
     .join(', ');
 }
 
+// The result array of a memory_search response: the value itself, or the first array
+// under results / matches / facts / data / result, looked up through nested wrappers
+// ({"data":{"results":[...]}}, as code mode may return) up to three levels deep, or in
+// the JSON text of an MCP {"content":[{"type":"text","text":"[...]"}]} block.
+function findResults(data, depth = 0) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object' || depth > 3) return null;
+  for (const key of ['results', 'matches', 'facts', 'data', 'result']) {
+    const found = findResults(data[key], depth + 1);
+    if (found) return found;
+  }
+  if (Array.isArray(data.content)) {
+    for (const block of data.content) {
+      if (!block || block.type !== 'text' || typeof block.text !== 'string') continue;
+      let inner;
+      try { inner = JSON.parse(block.text); } catch (_) { continue; }
+      const found = findResults(inner, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // Best-effort structured parse of a memory_search response: an array of
 // {content|text, relevance|similarity|score[, provenance]} objects, optionally
-// wrapped in {results:[...]} / {matches:[...]} / {facts:[...]}. Non-fact elements
+// wrapped as findResults describes. Non-fact elements
 // such as {_system_warnings:[...]} are ignored. Returns null (not an array) if the
 // shape isn't recognized, so callers can fall back to the legacy regex scan.
 // `similarity`/`score` are other gateways' spellings, not luca-memory compatibility.
@@ -152,13 +211,10 @@ function parseStructured(text) {
   if (!text) return null;
   let data;
   try { data = JSON.parse(text); } catch (_) { return null; }
-  const arr = Array.isArray(data) ? data
-    : Array.isArray(data && data.results) ? data.results
-    : Array.isArray(data && data.matches) ? data.matches
-    : Array.isArray(data && data.facts) ? data.facts
-    : null;
+  const arr = findResults(data);
   if (!arr) return null;
   return arr
+    .filter((item) => !isExcludedForInjection(item))
     .map((item) => {
       if (typeof item === 'string') return { content: clean(item), similarity: null };
       if (!item || typeof item !== 'object') return null;
@@ -168,9 +224,12 @@ function parseStructured(text) {
       const provenance = formatProvenance(item.provenance);
       if (provenance) content = `${content} (Provenance: ${provenance})`;
 
-      const simRaw = typeof item.relevance === 'number' ? item.relevance
-        : typeof item.similarity === 'number' ? item.similarity
+      // Precedence: similarity (true cosine), then score, then relevance. luca-memory's
+      // `relevance` is an RRF value (~0.016-0.075) that can never clear MIN_SIM, so a
+      // server that has no `similarity` field yet injects nothing, by design.
+      const simRaw = typeof item.similarity === 'number' ? item.similarity
         : typeof item.score === 'number' ? item.score
+        : typeof item.relevance === 'number' ? item.relevance
         : null;
       return { content: clean(content), similarity: simRaw };
     })
@@ -256,8 +315,8 @@ function actionableWarnings(warnings) {
 
 // Last resort: regex-scan raw "content":"..." pairs when the response isn't
 // parseable JSON in a recognized shape (unknown format, or a plain text blob).
-// No similarity data available — every result is kept (matches pre-adaptive-sizing
-// behavior) subject only to MAX_FACTS/SNIPPET_LEN.
+// No similarity data and no row metadata: every result is unscored, so budgetFill
+// drops them all while a floor is active (the default).
 function extractFactsLegacy(text) {
   if (!text) return [];
   const facts = [];
@@ -277,10 +336,12 @@ function truncate(s, len) {
 }
 
 // Greedily fill a char budget from the highest-similarity results first.
-// Results with a numeric similarity below MIN_SIM are dropped; results with
-// unknown similarity (legacy/unstructured responses) are always kept, so
-// behavior degrades to "cap at MAX_FACTS, flat SNIPPET_LEN" — i.e. exactly
-// the pre-adaptive-sizing behavior — when no similarity data is available.
+// Results with a numeric similarity below MIN_SIM are dropped. Results with unknown
+// similarity (legacy/unstructured responses) are kept only when BOTH floors are
+// disabled (MIN_SIM and RELATIVE_FLOOR are 0), which restores the pre-adaptive-sizing
+// behavior of "cap at MAX_FACTS, flat SNIPPET_LEN". While any floor is active an
+// unscored row cannot show it clears the floor, so it is dropped: otherwise a response
+// shape we fail to score would bypass the floor and the exclusion list entirely.
 //
 // On top of the absolute floor there is a RELATIVE one, and it is the one that
 // actually bites. Measured across 63 local project caches: 251 of 378 injected facts
@@ -310,7 +371,8 @@ function budgetFill(results) {
   const kept = known.filter((r) => r.similarity >= floor);
   kept.sort((a, b) => b.similarity - a.similarity);
 
-  const pool = kept.concat(unknown); // scored-and-relevant first, then unscored
+  const floorActive = MIN_SIM > 0 || RELATIVE_FLOOR > 0;
+  const pool = floorActive ? kept : kept.concat(unknown); // scored first, then unscored
   const out = [];
   let charsUsed = 0;
 
@@ -352,9 +414,45 @@ async function searchFacts(cap, query, wing, warningsOut) {
   return budgetFill(results);
 }
 
+// Same resolution session-start uses, so the hook and the worker always agree on it.
+function primeEnabled() {
+  let cfg = null;
+  try { cfg = pc.loadCached(); } catch (_) {}
+  return pc.hookFlag(cfg, 'session-start', 'memoryPrime', 'BIFROST_MEMORY_PRIME', false);
+}
+
+// Write through a temp file in the same directory and rename, so a concurrent reader
+// sees the old file or the new one, never a torn half.
+function writeCacheAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, data, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (_) {
+    try { fs.unlinkSync(tmp); } catch (__) {}
+  }
+}
+
 async function main() {
   const cacheFile = process.argv[2];
-  const query = process.argv[3] || 'recent decisions gotchas conventions';
+  const prime = primeEnabled();
+  // '' means no project signal: skip recall rather than search on a generic default.
+  // A missing argv (manual run) still gets the old default query.
+  let query = process.argv[3] === undefined ? 'recent decisions gotchas conventions' : process.argv[3];
+  // True when git timed out or failed (not "no repo"): the empty query is then unknown,
+  // not a deliberate skip, so the old facts must survive via carry-forward.
+  let gitError = false;
+  // HEAD the facts were recalled for; session-start renders them only while it matches.
+  let head;
+  if (prime && process.argv[3] === '--dir') {
+    const dir = process.argv[4] || process.cwd();
+    ({ query, gitError } = projectQuery(dir, os.homedir()));
+    // A failed git call leaves only a degraded query (the bare directory name). Searching
+    // on it would overwrite good facts with unrelated ones; keep what is cached instead.
+    if (gitError) query = '';
+    head = headRef(dir);
+  }
 
   // Signed plugin-config refresh. Independent of the inject cache below (different
   // endpoint, different env), so it runs first and unconditionally — a gateway with
@@ -370,7 +468,7 @@ async function main() {
   const caps = await gw.getCapabilities(TIMEOUT_MS);
   if (!caps) return;
 
-  const out = { at: Date.now() };
+  const out = { v: CACHE_SCHEMA, at: Date.now() };
 
   if (caps.skills) {
     // No library size here on purpose. Telling the model "N skills available" is the
@@ -388,8 +486,12 @@ async function main() {
     out.memory = {
       server: caps.memory.server,
       mode: caps.memory.mode,
-      facts: await searchFacts(caps.memory, query, null, rawWarnings),
+      facts: prime && query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
     };
+    // 'prime-off' is a deliberate skip like 'no-signal': nothing is carried forward.
+    if (!prime) out.memory.skipped = 'prime-off';
+    else if (!query && !gitError) out.memory.skipped = 'no-signal';
+    if (head !== undefined) out.memory.head = head;
     // No corpus size: v0.42 moved memory_stats behind memory_call, and the hot path
     // stays on memory_search alone. session-start renders without it.
 
@@ -400,11 +502,14 @@ async function main() {
     if (warnings.length) out.memory.warnings = warnings;
 
     // No default wing name: KB recall is opt-in only, via an explicit
-    // BIFROST_KB_WING configured for this gateway's KB scope.
+    // BIFROST_KB_WING configured for this gateway's KB scope, and only with priming on.
     const kbWing = (process.env.BIFROST_KB_WING || '').trim();
     const kbQuery = (process.env.BIFROST_KB_QUERY || query || '').trim();
-    if (kbWing) {
-      out.kb = { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) };
+    if (prime && kbWing) {
+      out.kb = kbQuery
+        ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) }
+        : { server: caps.memory.server, facts: [], ...(gitError ? {} : { skipped: 'no-signal' }) };
+      if (head !== undefined) out.kb.head = head;
     }
   }
 
@@ -414,13 +519,15 @@ async function main() {
   // Mirrors the fail-closed contract the signed plugin-config path already has.
   try {
     const prev = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    // Facts cached before v2 came from the old query and are never rendered; facts
+    // recalled on another branch belong to another query. Do not carry either forward.
+    for (const k of ['memory', 'kb']) {
+      if (prev[k] && (!(prev.v >= CACHE_SCHEMA) || prev[k].head !== head)) prev[k].facts = [];
+    }
     mergeWithPrevious(out, prev);
   } catch (_) { /* no previous cache — nothing to preserve */ }
 
-  try {
-    fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-    fs.writeFileSync(cacheFile, JSON.stringify(out), 'utf8');
-  } catch (_) {}
+  writeCacheAtomic(cacheFile, JSON.stringify(out));
 }
 
 // Carry forward the previous cache where this run produced nothing usable. Split out
@@ -434,6 +541,9 @@ function mergeWithPrevious(out, prev, now = Date.now()) {
       // KB wing switched off — and resurrecting it would keep injecting data the user
       // is no longer entitled to. Deprovisioning has to actually deprovision.
       if (!out[section]) continue;
+      // A deliberate skip is not a failed fetch: carrying old facts forward would keep
+      // injecting the generic recall the skip exists to stop.
+      if (out[section].skipped !== undefined) continue;
 
       const fresh = Array.isArray(out[section].facts) ? out[section].facts : [];
       const old = prev && prev[section] && Array.isArray(prev[section].facts) ? prev[section].facts : [];
@@ -471,5 +581,6 @@ if (require.main === module) {
 
 module.exports = {
   parseStructured, extractFactsLegacy, budgetFill, truncate, mergeWithPrevious,
-  MAX_CARRY_FORWARD_MS, searchFacts, extractSystemWarnings, actionableWarnings,
+  MAX_CARRY_FORWARD_MS, searchFacts, isExcludedForInjection, EXCLUDED_FOR_INJECTION, DEFAULT_MIN_SIM, extractSystemWarnings, actionableWarnings,
+  writeCacheAtomic,
 };

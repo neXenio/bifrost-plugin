@@ -14,7 +14,7 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 
 const gw = require('../hooks/lib/gateway.cjs');
-const { parseStructured, budgetFill } = require('../hooks/refresh.cjs');
+const { parseStructured, budgetFill, isExcludedForInjection } = require('../hooks/refresh.cjs');
 
 // This plugin's own repo is also a real working project: a genuine Claude Code
 // session running here legitimately creates `.bifrost/candidates.md` via the session
@@ -261,6 +261,21 @@ test('the relative floor drops a tail far below the best hit', () => {
   assert.deepStrictEqual(kept.map((k) => k.content), ['top', 'near']);
 });
 
+// Load a fresh refresh.cjs under env overrides (the floors are read at module load).
+function withRefreshEnv(env, fn) {
+  const prev = {};
+  for (const k of Object.keys(env)) { prev[k] = process.env[k]; process.env[k] = env[k]; }
+  try {
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+    return fn(require('../hooks/refresh.cjs'));
+  } finally {
+    for (const k of Object.keys(env)) {
+      if (prev[k] === undefined) delete process.env[k]; else process.env[k] = prev[k];
+    }
+    delete require.cache[require.resolve('../hooks/refresh.cjs')];
+  }
+}
+
 test('both floors are configurable, and zero disables them', () => {
   const prevMin = process.env.BIFROST_MEMORY_MIN_SIM;
   const prevRel = process.env.BIFROST_MEMORY_RELATIVE_FLOOR;
@@ -291,12 +306,24 @@ test('higher-scored facts rank first', () => {
   assert.strictEqual(kept[0].content, 'high');
 });
 
-test('unscored facts (legacy response shape) are still kept', () => {
-  const kept = budgetFill([
+test('unscored facts are dropped while a floor is active, kept when both floors are off', () => {
+  const unscored = [
     { content: 'a', similarity: null },
     { content: 'b', similarity: null },
-  ]);
-  assert.strictEqual(kept.length, 2);
+  ];
+  assert.deepStrictEqual(budgetFill(unscored), [], 'default floors are active');
+  // Scored rows still come through; the unscored ones no longer ride along behind them.
+  assert.deepStrictEqual(
+    budgetFill([{ content: 'hit', similarity: 0.9 }, ...unscored]).map((k) => k.content),
+    ['hit']);
+  for (const [min, rel] of [['0.3', '0'], ['0', '0.9']]) {
+    const keep = withRefreshEnv({ BIFROST_MEMORY_MIN_SIM: min, BIFROST_MEMORY_RELATIVE_FLOOR: rel },
+      (fresh) => fresh.budgetFill(unscored).length);
+    assert.strictEqual(keep, 0, `MIN_SIM=${min} RELATIVE_FLOOR=${rel} is still a floor`);
+  }
+  const off = withRefreshEnv({ BIFROST_MEMORY_MIN_SIM: '0', BIFROST_MEMORY_RELATIVE_FLOOR: '0' },
+    (fresh) => fresh.budgetFill(unscored).length);
+  assert.strictEqual(off, 2, 'with both floors off the pre-floor behaviour returns');
 });
 
 // --- Group 4: per-project cache key ------------------------------------------------
@@ -431,11 +458,21 @@ function tmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-home-'));
 }
 
+// Fact priming is off by default, so the tests that look at rendered facts opt in here.
+// The default itself is covered by runSessionStartUnprimed.
 function runSessionStart(env, home) {
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
-    env: { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', ...env },
+    env: { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', BIFROST_MEMORY_PRIME: '1', ...env },
     encoding: 'utf8',
     timeout: 10000,
+  });
+}
+
+function runSessionStartUnprimed(env, home) {
+  const e = { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', ...env };
+  delete e.BIFROST_MEMORY_PRIME;
+  return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
+    env: e, encoding: 'utf8', timeout: 10000,
   });
 }
 
@@ -444,9 +481,14 @@ function seedCache(home, projDir, payload) {
   const digest = crypto.createHash('sha256').update(projDir).digest('hex').slice(0, 12);
   const dir = path.join(home, '.cache', 'bifrost-plugin');
   fs.mkdirSync(dir, { recursive: true });
+  // Facts only render for the HEAD they were recalled on; a temp dir has none ('').
+  const withHead = { ...payload };
+  for (const k of ['memory', 'kb']) {
+    if (withHead[k] && withHead[k].head === undefined) withHead[k] = { ...withHead[k], head: '' };
+  }
   fs.writeFileSync(
     path.join(dir, `inject-${label}-${digest}.json`),
-    JSON.stringify(Object.assign({ at: Date.now() }, payload))
+    JSON.stringify(Object.assign({ v: 2, at: Date.now() }, withHead))
   );
   return dir;
 }
@@ -1529,9 +1571,10 @@ function sessionWithCacheAge(ageMinutes, extraEnv) {
   const label = path.basename(proj).replace(/[^A-Za-z0-9_-]/g, '_');
   const digest = crypto.createHash('sha256').update(proj).digest('hex').slice(0, 12);
   fs.writeFileSync(path.join(dir, `inject-${label}-${digest}.json`), JSON.stringify({
+    v: 2,
     at,
     skills: { server: 's', mode: 'flat' },
-    memory: { server: 'm', mode: 'flat', total: 1, facts: [{ content: 'f' }] },
+    memory: { server: 'm', mode: 'flat', total: 1, head: '', facts: [{ content: 'f' }] },
   }));
   return runSessionStart(Object.assign({
     CLAUDE_PROJECT_DIR: proj, BIFROST_URL: 'https://g.example/mcp', BIFROST_VK: 'k',
@@ -2038,6 +2081,18 @@ test('an older memory server yields no facts rather than a crash', async () => {
   assert.strictEqual(calls.length, 1);
 });
 
+test('similarity beats score beats relevance when several are present', () => {
+  const one = (item) => parseStructured(JSON.stringify([{ content: 'c', ...item }]))[0].similarity;
+  assert.strictEqual(one({ similarity: 0.8, score: 0.6, relevance: 0.03 }), 0.8);
+  assert.strictEqual(one({ score: 0.6, relevance: 0.03 }), 0.6);
+  assert.strictEqual(one({ relevance: 0.03 }), 0.03);
+});
+
+test('an RRF-scale relevance alone never clears the absolute floor', () => {
+  const parsed = parseStructured(JSON.stringify([{ content: 'rrf only', relevance: 0.07 }]));
+  assert.deepStrictEqual(budgetFill(parsed), []);
+});
+
 test('search results are scored from the v0.42 `relevance` field', () => {
   // budgetFill drops anything it cannot score, so an unrecognized score field empties
   // the memory section rather than merely misordering it.
@@ -2416,4 +2471,358 @@ test('a warning with no message falls back to a synthesized "<count> <type>" lin
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /\*\*Needs attention\*\*:.*181 stale memories/);
+});
+
+
+// --- Query builder, exclusion list, deliberate recall skip ---------------------------
+
+const { buildQuery } = sessionStart;
+const { mergeWithPrevious: mergeSkipped } = require('../hooks/refresh.cjs');
+
+test('buildQuery: a ticket-named dir lends its topic words when the branch has none', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/task-LUCA-35536-web-collection-123', home: '/h', branch: 'HEAD' }),
+    'LUCA-35536 web collection');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/LUCA-36578-UI-fixes', home: '/h' }), 'LUCA-36578 UI fixes');
+});
+
+test('buildQuery: a bare ticket key is not a signal', () => {
+  assert.strictEqual(buildQuery({ dir: '/h/orca/LUCA-36122', home: '/h', branch: 'HEAD' }), '');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/orca/LUCA-1', home: '/h', toplevel: '/h/orca/LUCA-1', branch: 'LUCA-1' }), '');
+});
+
+test('buildQuery: ticket key stays when there is a repo or topic word; repo holding the key is dropped', () => {
+  const dir = '/h/orca/task-LUCA-35536-web-collection-123';
+  const branch = 'task-LUCA-35536-web-collection-123';
+  assert.strictEqual(
+    buildQuery({ dir, home: '/h', remoteUrl: 'git@gitlab.com:g/luca-web.git', toplevel: dir, branch }),
+    'luca-web LUCA-35536 web collection');
+  assert.strictEqual(buildQuery({ dir, home: '/h', toplevel: dir, branch }), 'LUCA-35536 web collection');
+});
+
+test('buildQuery: ticket keys are exact-case only', () => {
+  const q = (branch) => buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch });
+  assert.strictEqual(q('fix-login-2'), 'r login');
+  assert.strictEqual(q('hotfix-1234'), 'r');
+  assert.strictEqual(q('bump-node-18'), 'r bump node');
+  assert.strictEqual(q('fix/utf-8-handling'), 'r utf handling');
+  assert.strictEqual(q('feature/LUCA-123_foo'), 'r LUCA-123 foo');
+});
+
+test('buildQuery: a repo at $HOME ignores its remote too, with Windows separators and case', () => {
+  assert.strictEqual(buildQuery({
+    dir: 'C:/Users/Me/Desktop', home: 'c:\\users\\me', remoteUrl: 'git@x:me/dotfiles.git',
+    toplevel: 'C:/Users/Me', branch: 'main' }), '');
+});
+
+test('buildQuery: remote name splits on : and \\, and rejects a numeric last segment', () => {
+  const q = (remoteUrl) => buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl, toplevel: '/h/x/foo' });
+  assert.strictEqual(q('ssh://git@host:2222/'), 'foo');
+  assert.strictEqual(q('host:repo.git'), 'repo');
+  assert.strictEqual(q('C:\\git\\repo.git'), 'repo');
+});
+
+test('buildQuery: tokens are deduplicated case-insensitively', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/web', home: '/h', toplevel: '/h/web', branch: 'fix/Web-web-WEB-api' }), 'web api');
+});
+
+test('buildQuery: repo from remote url, plus branch words without prefix or generic tokens', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl: 'git@gitlab.com:g/bifrost-plugin.git',
+      toplevel: '/h/x/foo', branch: 'feature/memory-injection-fix' }),
+    'bifrost-plugin memory injection fix');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl: 'https://x/g/r.git', toplevel: '/h/x/foo', branch: 'main' }),
+    'r');
+});
+
+test('buildQuery: ticket key and words from a branch, capped at five words', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch: 'fix/LAS-12-pms_sync-retry-a1-b2-c3-d4' }),
+    'r LAS-12 pms sync retry a1 b2');
+});
+
+test('buildQuery: lowercase words like collection-123 are not read as a ticket key', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/r', home: '/h', toplevel: '/h/r', branch: 'web-collection-123' }),
+    'r web collection');
+});
+
+test('buildQuery: no signal returns an empty string', () => {
+  assert.strictEqual(buildQuery({ dir: '/h', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/.cursor', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/full_context', home: '/h' }), '');
+  assert.strictEqual(buildQuery({ dir: '/h/Desktop', home: '/h', toplevel: '/h', branch: 'main' }), '');
+});
+
+test('buildQuery: a generic dir inside a git repo falls back to the repo', () => {
+  assert.strictEqual(
+    buildQuery({ dir: '/h/proj/src', home: '/h', toplevel: '/h/proj', branch: 'main' }), 'proj');
+  assert.strictEqual(
+    buildQuery({ dir: '/h/proj/.cursor', home: '/h', toplevel: '/h/proj', branch: 'develop' }), 'proj');
+});
+
+test('isExcludedForInjection drops private, mail and screen-capture rows', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ provenance: { wing: 'screenpipe' } }));
+  assert.ok(ex({ provenance: { wing: 'personal' } }));
+  assert.ok(ex({ provenance: { source_type: 'claude-session' } }));
+  assert.ok(ex({ provenance: { source_type: 'screenpipe' } }));
+  assert.ok(ex({ provenance: { tags: 'a,session-summary,b' } }));
+  assert.ok(ex({ provenance: { tags: 'source:email' } }));
+  assert.ok(ex({ provenance: { tags: 'source:superhuman' } }));
+  assert.ok(ex({ provenance: { tags: 'source:screenpipe' } }));
+  assert.ok(ex({ provenance: { scope: 'private' } }));
+  assert.ok(ex({ metadata: { scope: 'private' } }));
+});
+
+test('isExcludedForInjection unions tags across provenance, item and metadata', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ provenance: { tags: ['ok'] }, tags: ['session-summary'] }));
+  assert.ok(ex({ provenance: { tags: 'ok' }, metadata: { tags: 'a, Source:Email' } }));
+  assert.ok(ex({ metadata: { tags: ['source:screenpipe'] } }));
+  assert.ok(ex({ tags: 'x,source:superhuman' }));
+});
+
+test('isExcludedForInjection checks wing on the item and scans a string provenance', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(ex({ wing: 'Personal' }));
+  assert.ok(ex({ provenance: 'subject=x, wing=screenpipe, room=y' }));
+  assert.ok(ex({ provenance: 'wing=personal' }));
+  assert.ok(ex({ provenance: 'tags=a,session-summary' }));
+  assert.ok(ex({ provenance: 'Scope=Private' }));
+  assert.ok(!ex({ provenance: 'subject=x, wing=team' }));
+});
+
+test('isExcludedForInjection keeps durable facts, including reflect-all session tags', () => {
+  const ex = (o) => isExcludedForInjection({ content: 'c', ...o });
+  assert.ok(!ex({}));
+  assert.ok(!ex({ provenance: { wing: 'team', tags: 'source:conversation,session:abc,project:x' } }));
+  assert.ok(!ex({ provenance: { scope: 'team' } }));
+});
+
+test('parseStructured excludes before provenance is folded into content', () => {
+  const parsed = parseStructured(JSON.stringify([
+    { content: 'drop', similarity: 0.9, provenance: { wing: 'screenpipe' } },
+    { content: 'keep', similarity: 0.8, provenance: { wing: 'team' } },
+  ]));
+  assert.strictEqual(parsed.length, 1);
+  assert.match(parsed[0].content, /^keep/);
+});
+
+test('mergeWithPrevious does not carry facts over a deliberately skipped run', () => {
+  const prev = { at: 1000, memory: { server: 'm', facts: [{ content: 'OLD GENERIC' }] } };
+  const skipped = mergeSkipped(
+    { at: 2000, memory: { server: 'm', facts: [], skipped: 'no-signal' } }, prev, 2000);
+  assert.deepStrictEqual(skipped.memory.facts, []);
+  assert.ok(!skipped.memory.stale);
+  // An ordinary empty run still carries forward.
+  const failed = mergeSkipped({ at: 2000, memory: { server: 'm', facts: [] } }, prev, 2000);
+  assert.strictEqual(failed.memory.facts.length, 1);
+});
+
+test('mergeWithPrevious does not carry KB facts over a skipped KB run', () => {
+  const prev = { at: 1000, kb: { server: 'm', facts: [{ content: 'OLD KB' }] } };
+  const out = mergeSkipped(
+    { at: 2000, kb: { server: 'm', facts: [], skipped: 'no-signal' } }, prev, 2000);
+  assert.deepStrictEqual(out.kb.facts, []);
+});
+
+test('facts from a cache without v>=2 are not rendered, but skills still are', () => {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, {
+    v: undefined,
+    skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
+    memory: { server: 'teammemory', mode: 'flat', facts: [{ content: 'OLD-GENERIC-FACT' }] },
+    kb: { server: 'teammemory', facts: [{ content: 'OLD-KB-FACT' }] },
+  });
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  assert.ok(!r.stdout.includes('OLD-GENERIC-FACT'));
+  assert.ok(!r.stdout.includes('OLD-KB-FACT'));
+  assert.ok(r.stdout.includes('teamskills'));
+  assert.ok(r.stdout.includes('teammemory'));
+});
+
+test('projectQuery: "not a git repository" is no signal, a failing git call is an error', () => {
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'plain-'));
+  assert.deepStrictEqual(projectQuery(plain, '/nowhere'), { query: path.basename(plain), gitError: false });
+  const gone = path.join(plain, 'missing');
+  assert.strictEqual(projectQuery(gone, '/nowhere').gitError, true);
+});
+
+// --- Fail-closed result parsing (C-15) -----------------------------------------------
+
+const SCREENPIPE_ROW = { content: 'SCREENPIPE-LEAK', similarity: 0.9, wing: 'screenpipe' };
+const GOOD_ROW = { content: 'GOOD-FACT', similarity: 0.9 };
+
+async function factsFor(reply) {
+  return withStubbedGateway(recordingGateway([], typeof reply === 'string' ? reply : JSON.stringify(reply)),
+    () => searchFacts({ server: 'mem', mode: 'flat' }, 'q', null));
+}
+
+test('exclusion applies inside nested result wrappers too', async () => {
+  const shapes = {
+    'data.results': { data: { results: [SCREENPIPE_ROW, GOOD_ROW] } },
+    'result': { result: [SCREENPIPE_ROW, GOOD_ROW] },
+    'data.data.matches': { data: { data: { matches: [SCREENPIPE_ROW, GOOD_ROW] } } },
+    'mcp content block': { content: [{ type: 'text', text: JSON.stringify([SCREENPIPE_ROW, GOOD_ROW]) }] },
+  };
+  for (const [name, reply] of Object.entries(shapes)) {
+    const facts = await factsFor(reply);
+    assert.deepStrictEqual(facts.map((f) => f.content), ['GOOD-FACT'], name);
+  }
+});
+
+test('an unrecognised shape goes through the regex extractor, whose rows count as unscored and are dropped', async () => {
+  const text = 'prefix ' + JSON.stringify({ hits: [SCREENPIPE_ROW, GOOD_ROW] });
+  assert.deepStrictEqual(await factsFor(text), []);
+  assert.deepStrictEqual(await factsFor({ hits: [SCREENPIPE_ROW, GOOD_ROW] }), []);
+});
+
+test('unscored rows next to scored ones do not bypass the floor', async () => {
+  const facts = await factsFor([GOOD_ROW, { content: 'NO-SCORE' }, 'a bare string']);
+  assert.deepStrictEqual(facts.map((f) => f.content), ['GOOD-FACT']);
+});
+
+test('parseStructured finds a bare array, results, matches and facts wrappers', () => {
+  for (const key of ['results', 'matches', 'facts']) {
+    assert.strictEqual(parseStructured(JSON.stringify({ [key]: [GOOD_ROW] })).length, 1, key);
+  }
+  assert.strictEqual(parseStructured(JSON.stringify({ data: { results: [] } })).length, 0);
+  assert.strictEqual(parseStructured(JSON.stringify({ error: 'x' })), null);
+});
+
+// --- Fact priming is opt-in (C-14) ---------------------------------------------------
+
+function primedSession(env, memory) {
+  const home = tmpHome();
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  seedCache(home, proj, { memory, kb: { server: 'teammemory', facts: [{ content: 'KB-FACT' }] } });
+  return { proj, home, run: (run) => run({ CLAUDE_PROJECT_DIR: proj, ...env }, home) };
+}
+
+const FACTS_CACHE = { server: 'teammemory', mode: 'flat', facts: [{ content: 'CACHED-FACT' }] };
+
+test('by default session-start prints the recall and store guidance but no facts', () => {
+  const s = primedSession({}, FACTS_CACHE);
+  const r = s.run(runSessionStartUnprimed);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /## Bifrost memory/);
+  assert.match(r.stdout, /\*\*Recall\*\*/);
+  assert.match(r.stdout, /\*\*Store\*\*/);
+  assert.ok(!r.stdout.includes('CACHED-FACT'), 'old facts must not render when priming is off');
+  assert.ok(!r.stdout.includes('KB-FACT'), 'nor KB facts');
+  assert.ok(!r.stdout.includes('untrusted-reference-data'));
+});
+
+test('BIFROST_MEMORY_PRIME=1 renders the cached facts', () => {
+  const s = primedSession({}, FACTS_CACHE);
+  const r = s.run(runSessionStart);
+  assert.ok(r.stdout.includes('CACHED-FACT'));
+  assert.ok(r.stdout.includes('KB-FACT'));
+});
+
+test('BIFROST_MEMORY_PRIME=0 and an empty value stay off', () => {
+  for (const v of ['0', '']) {
+    const s = primedSession({}, FACTS_CACHE);
+    const r = s.run((env, home) => runSessionStart({ ...env, BIFROST_MEMORY_PRIME: v }, home));
+    assert.ok(!r.stdout.includes('CACHED-FACT'), `PRIME=${JSON.stringify(v)}`);
+  }
+});
+
+test('the signed plugin-config memoryPrime field turns priming on, and a lock beats the env', () => {
+  const pcMod = require('../hooks/lib/plugin-config.cjs');
+  const cfg = (locked) => ({ hooks: { 'session-start': {
+    enabled: true, fields: { memoryPrime: true }, lockedFields: locked ? ['memoryPrime'] : [] } } });
+  const prev = process.env.BIFROST_MEMORY_PRIME;
+  try {
+    delete process.env.BIFROST_MEMORY_PRIME;
+    const flag = (c) => pcMod.hookFlag(c, 'session-start', 'memoryPrime', 'BIFROST_MEMORY_PRIME', false);
+    assert.strictEqual(flag(null), false);
+    assert.strictEqual(flag(cfg(false)), true);
+    process.env.BIFROST_MEMORY_PRIME = '0';
+    assert.strictEqual(flag(cfg(false)), false, 'unlocked: the local env wins');
+    assert.strictEqual(flag(cfg(true)), true, 'locked: the server value wins');
+  } finally {
+    if (prev === undefined) delete process.env.BIFROST_MEMORY_PRIME; else process.env.BIFROST_MEMORY_PRIME = prev;
+  }
+});
+
+test('facts recalled on another branch are not rendered', () => {
+  const s = primedSession({}, { ...FACTS_CACHE, head: 'ref: refs/heads/other-branch' });
+  const r = s.run(runSessionStart);
+  assert.ok(!r.stdout.includes('CACHED-FACT'));
+  assert.match(r.stdout, /\*\*Recall\*\*/, 'the guidance still renders');
+});
+
+// --- Query privacy, locale, cache head (C-22) ----------------------------------------
+
+test('buildQuery: userinfo in a remote URL never reaches the query', () => {
+  const q = (remoteUrl) => buildQuery({ dir: '/h/x/foo', home: '/h', remoteUrl, toplevel: '/h/x/foo' });
+  assert.strictEqual(q('https://user:SECRETTOKEN@host'), 'foo');
+  assert.strictEqual(q('https://pass@host/'), 'foo');
+  assert.strictEqual(q('https://u:SECRETTOKEN@gitlab.example.com/grp/sub/my-proj.git'), 'my-proj');
+  assert.strictEqual(q('user:SECRETTOKEN@host'), 'foo', 'a last segment holding @ is dropped');
+  assert.ok(!q('https://user:SECRETTOKEN@host').includes('SECRETTOKEN'));
+});
+
+test('projectQuery: "not a git repository" is recognised in a non-English locale', () => {
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'plain-'));
+  const saved = { ...process.env };
+  Object.assign(process.env, { LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8', LANGUAGE: 'de' });
+  try {
+    assert.strictEqual(projectQuery(plain, '/nowhere').gitError, false);
+  } finally {
+    for (const k of ['LC_ALL', 'LANG', 'LANGUAGE']) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  }
+});
+
+test('projectQuery starts git with LC_ALL=C and LANG=C', () => {
+  // A git shim that records the locale it was started with.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-'));
+  const log = path.join(bin, 'locale.log');
+  fs.writeFileSync(path.join(bin, 'git'),
+    `#!/bin/sh\necho "$LC_ALL/$LANG" >> '${log}'\nexit 128\n`, { mode: 0o755 });
+  const { projectQuery } = require('../hooks/lib/project-query.cjs');
+  const saved = { ...process.env };
+  Object.assign(process.env, { PATH: `${bin}${path.delimiter}${saved.PATH}`, LC_ALL: 'de_DE.UTF-8', LANG: 'de_DE.UTF-8' });
+  try {
+    projectQuery(os.tmpdir(), '/nowhere');
+  } finally {
+    for (const k of ['PATH', 'LC_ALL', 'LANG']) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  }
+  const seen = fs.readFileSync(log, 'utf8').trim().split('\n');
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((l) => l === 'C/C'), `git saw ${seen.join(', ')}`);
+});
+
+test('headRef reads HEAD from a repo, a subdirectory and a linked worktree, and is empty elsewhere', () => {
+  const { headRef } = require('../hooks/lib/project-query.cjs');
+  const { execFileSync } = require('child_process');
+  const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.email=a@b', '-c', 'user.name=n',
+    '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } });
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'head-')));
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'commit', '-q', '--allow-empty', '-m', 'x');
+  assert.strictEqual(headRef(repo), 'ref: refs/heads/main');
+  fs.mkdirSync(path.join(repo, 'a', 'b'), { recursive: true });
+  assert.strictEqual(headRef(path.join(repo, 'a', 'b')), 'ref: refs/heads/main');
+  const wt = path.join(repo, '..', path.basename(repo) + '-wt');
+  git(repo, 'worktree', 'add', '-q', '-b', 'feat-x', wt);
+  assert.strictEqual(headRef(wt), 'ref: refs/heads/feat-x');
+  git(repo, 'checkout', '-q', '-b', 'LUCA-9-gamma');
+  assert.strictEqual(headRef(repo), 'ref: refs/heads/LUCA-9-gamma');
+  assert.strictEqual(headRef(fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-'))), '');
+  assert.strictEqual(headRef('/nonexistent/dir/for/sure'), '');
 });

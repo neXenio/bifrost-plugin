@@ -190,6 +190,7 @@ match if your gateway does not use the default `skills`.
 | `BIFROST_KB_QUERY` | Query string used for the KB recall (falls back to the per-project memory query) | project-derived query |
 | `BIFROST_KB_INJECT` | Set to `0` to disable the KB recall header at session start | (enabled) |
 | `BIFROST_MEMORY_INJECT` | Set to `0` to disable the memory recall header at session start | (enabled) |
+| `BIFROST_MEMORY_PRIME` | Set to `1` to also inject recalled facts (and KB facts) at session start. Off by default: the header then only carries the recall/store guidance and no `memory_search` runs at session start. Signed plugin-config field `memoryPrime`, lockable | (off) |
 | `BIFROST_SKILLS_INJECT` | Set to `0` to disable the skill-library primer at session start | (enabled) |
 | `BIFROST_REFRESH` | Set to `0` to disable the background cache refresh entirely (no session-start-initiated network traffic) | (enabled) |
 | `BIFROST_REFRESH_INTERVAL_MS` | Minimum interval between background gateway refreshes | `3600000` (1 hour) |
@@ -280,7 +281,8 @@ MCP tools, already merged with your own non-locked opt-ins on the server.
 - Fields an administrator has **locked** override the corresponding environment
   variable above. Unlocked fields still yield to your local setting.
 
-Injected memory/KB sizing is adaptive, not a flat fact count — `hooks/refresh.cjs`
+Fact priming is opt-in (`BIFROST_MEMORY_PRIME=1`); the sizing below only applies when it
+is on. Injected memory/KB sizing is adaptive, not a flat fact count — `hooks/refresh.cjs`
 fetches a wider candidate pool from `memory_search`, then keeps the most similar
 results within a character budget (higher-similarity facts get a larger snippet):
 
@@ -289,12 +291,13 @@ results within a character budget (higher-similarity facts get a larger snippet)
 | `BIFROST_MEMORY_MAX_FACTS` | Cap on facts injected per section (memory, KB) | `6` |
 | `BIFROST_MEMORY_SNIPPET_LEN` | Base per-fact snippet length in characters | `180` |
 | `BIFROST_INJECT_BUDGET` | Total character budget per section (~4 chars/token) | `2000` (~500 tokens) |
-| `BIFROST_MEMORY_MIN_SIM` | Drop `memory_search` results below this similarity score | `0.45` |
+| `BIFROST_MEMORY_MIN_SIM` | Drop `memory_search` results below this score. Applies to luca-memory's `similarity` field (true cosine); needs a luca-memory that returns it, since older servers return only the RRF `relevance` and then nothing is injected. 0.55 comes from a replay of 770 real hook calls (judged precision about 0.82 at 0.55 vs 0.73 at 0.45) | `0.55` |
 | `BIFROST_MEMORY_FAST` | Set to `1` to pass `fast:true` to `memory_search` (server-side fast path) | `0` (off — opt-in until the gateway ships the param) |
 
 If `memory_search` returns similarity/score metadata, results are ranked and
-budget-filled; if not (or the response isn't parseable JSON), it falls back to
-the original flat-cap behavior so recall never breaks on an older gateway.
+budget-filled. Rows with no numeric score (an unrecognised response shape, plain
+strings, the regex fallback) are dropped while any floor is active; they are kept
+only when both `BIFROST_MEMORY_MIN_SIM=0` and `BIFROST_MEMORY_RELATIVE_FLOOR=0`.
 
 There is **no separate KB MCP server** — KB recall is `memory_search` against
 the memory server, scoped to the KB wing via `wing=<BIFROST_KB_WING>`. No wing
@@ -547,8 +550,15 @@ All hooks silent-fail: any error exits 0 silently so they never block a prompt.
 Hooks write only to their own cache under `~/.cache/bifrost-plugin/` — they
 never touch Claude Code configuration, launch other programs, or open browsers.
 The background cache refresh contacts the gateway at most once per hour
-(`BIFROST_REFRESH=0` disables it), sending only the project directory basename
-plus a fixed recall phrase.
+(`BIFROST_REFRESH=0` disables it). By default it sends no query at all: session-start
+fact priming is off, so the worker only learns which skills and memory tools the
+gateway offers. With priming on (`BIFROST_MEMORY_PRIME=1`) it sends one
+`memory_search` whose query is the git remote's repository name (else the repo
+directory name), a ticket key from the branch or directory name, and up to five
+words from the branch name. Branch names can carry people's names, for example
+`phil/LUCA-123-fix-login` becomes `my-repo LUCA-123 phil fix login`, and anything else
+typed into a branch name is sent too. Credentials in a remote URL are dropped before
+the name is taken. With `BIFROST_KB_WING` set, the KB recall sends the same query.
 
 ---
 

@@ -12,10 +12,12 @@
 //      the cached copy was Ed25519-verified before it was written).
 //   5. If the cache is missing or stale, spawn a detached background worker
 //      (refresh.cjs) that talks to the gateway and refreshes both caches. It
-//      outlives this hook and never delays startup. The inject query it sends
-//      contains only the project directory basename plus a fixed recall phrase —
-//      nothing else leaves the machine. Disable all background refresh (and thereby
-//      all session-start-initiated network traffic) with BIFROST_REFRESH=0.
+//      outlives this hook and never delays startup. It is handed the project dir
+//      and, only when fact priming is opted into (BIFROST_MEMORY_PRIME=1), builds the
+//      recall query itself (repo name, ticket key, branch words; see
+//      lib/project-query.cjs) — nothing else leaves the machine. Disable all background
+//      refresh (and thereby all session-start-initiated network traffic) with
+//      BIFROST_REFRESH=0.
 //
 // This hook only reads/writes its own cache under ~/.cache/bifrost-plugin/. It
 // never launches other programs, opens browsers, or touches Claude Code
@@ -39,6 +41,7 @@ const { spawn } = require('child_process');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 const usage = require('./usage.cjs');
+const { buildQuery, headRef } = require('./lib/project-query.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -132,15 +135,13 @@ function emitContext() {
   } catch (_) {}
 }
 
-function projectName() {
-  const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
-  return dir ? path.basename(dir) : '';
+function projectDir() {
+  return (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
 }
 
-function projectQuery() {
-  const n = projectName();
-  const base = 'recent decisions, gotchas, conventions, open work';
-  return n ? `${n} ${base}` : base;
+function projectName() {
+  const dir = projectDir();
+  return dir ? path.basename(dir) : '';
 }
 
 // Cache key includes a hash of the FULL project path. Keying on the bare basename
@@ -148,7 +149,7 @@ function projectQuery() {
 // whichever refreshed last won and one project's recalled facts were injected into
 // the other's session labelled "recalled for this project".
 function cacheFile() {
-  const dir = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  const dir = projectDir();
   const label = (projectName() || 'default').replace(/[^A-Za-z0-9_-]/g, '_');
   const digest = crypto.createHash('sha256').update(dir).digest('hex').slice(0, 12);
   return path.join(os.homedir(), '.cache', 'bifrost-plugin', `inject-${label}-${digest}.json`);
@@ -360,6 +361,23 @@ function emitRoster(disc) {
   process.stdout.write(lines.join('\n'));
 }
 
+// Caches before schema v2 hold facts from the old generic query, fetched before the
+// private-row exclusion existed. Never render those; the skills/server/mode info in the
+// same cache is still used.
+//
+// Facts are also never rendered unless fact priming is on (BIFROST_MEMORY_PRIME=1 or the
+// signed `memoryPrime` field), so a cache written while it was on cannot leak facts
+// after it is switched off. And only while HEAD is still the one they were recalled for:
+// the cache is keyed by directory, so after a branch switch they answer another query.
+// `head` is read from .git/HEAD with no process spawn.
+const CACHE_SCHEMA = 2;
+function recallFacts(cache, section, cfg) {
+  if (!cache || !(cache.v >= CACHE_SCHEMA)) return [];
+  if (!pc.hookFlag(cfg, HOOK_ID, 'memoryPrime', 'BIFROST_MEMORY_PRIME', false)) return [];
+  if (!section || section.head !== headRef(projectDir())) return [];
+  return Array.isArray(section.facts) ? section.facts : [];
+}
+
 // Facts are either plain strings (older caches, pre-adaptive-sizing refresh.cjs)
 // or {content, similarity} objects (current refresh.cjs). Handle both so a
 // stale cache from a not-yet-refreshed install never breaks the header.
@@ -447,14 +465,15 @@ function clean(s) {
 
 // Memory is advertised, then searched by the agent — not pre-fetched and dumped.
 //
-// The session-start query can only ever be the project directory name plus a fixed
-// phrase, because at second zero there is no other context. That returns the same
-// handful of facts for every session in a directory regardless of what the work turns
-// out to be. The agent's own query, twenty turns in, is strictly better. So the
-// primer's job is to make the agent aware the corpus exists and worth querying, and
-// the retrieval happens when there is enough context to retrieve well.
+// The session-start query can only be built from the project (repo name, ticket key,
+// branch words), because at second zero there is no other context. Replayed on real
+// traffic that returned about 0.24 useful items per session, and the same few
+// boilerplate ids for every session in a directory. The agent's own query, twenty
+// turns in, is strictly better. So by default the primer only makes the agent aware the
+// corpus exists and worth querying (the Recall/Store lines below), and the retrieval
+// happens when there is enough context to retrieve well. Fact priming is opt-in.
 //
-// Any primed facts are wrapped in an explicit untrusted-data boundary. They arrive on
+// Any primed facts (BIFROST_MEMORY_PRIME=1) are wrapped in an explicit untrusted-data boundary. They arrive on
 // the same stdout stream as this plugin's own instructions, so without the boundary a
 // stored fact shaped like an instruction would read as one.
 function emitMemory(cache, cfg, use, refreshing) {
@@ -462,7 +481,7 @@ function emitMemory(cache, cfg, use, refreshing) {
   const m = cache && cache.memory;
   if (!m) return;
 
-  const facts = Array.isArray(m.facts) ? m.facts : [];
+  const facts = recallFacts(cache, m, cfg);
   // A cache written by an older refresh.cjs may carry facts with no server/mode. Still
   // render the facts; just omit the invocation lines we cannot spell correctly rather
   // than guessing a tool name.
@@ -561,7 +580,7 @@ function emitMemory(cache, cfg, use, refreshing) {
 function emitKb(cache, cfg, refreshing) {
   if (!pc.hookFlag(cfg, HOOK_ID, 'kbInject', 'BIFROST_KB_INJECT', true)) return;
   const k = cache && cache.kb;
-  const facts = k && Array.isArray(k.facts) ? k.facts : [];
+  const facts = recallFacts(cache, k, cfg);
   if (!facts.length) return;
   const lines = [
     '',
@@ -730,7 +749,7 @@ const REFRESH_INTERVAL_MS = parseInt(
 // hourly throttle blocks it, injects a false statement into context — and the throttle
 // case is the common one, because refresh.cjs bumps the file's mtime even when it
 // carries facts forward, so an old `at` routinely pairs with a fresh mtime.
-function refreshWillRun(file, now = Date.now()) {
+function refreshWillRun(file, now = Date.now(), force = false) {
   if (process.env.BIFROST_REFRESH === '0') return false;
   const { url, vk } = gw.env();
   let cfgEnv = {};
@@ -738,17 +757,25 @@ function refreshWillRun(file, now = Date.now()) {
   const wantsConfig = cfgEnv.enabled && cfgEnv.keyappUrl && cfgEnv.vk;
   if (!(url && vk) && !wantsConfig) return false;
   try {
-    if (now - fs.statSync(file).mtimeMs < REFRESH_INTERVAL_MS) return false;
+    if (!force && now - fs.statSync(file).mtimeMs < REFRESH_INTERVAL_MS) return false;
   } catch (_) { /* no cache yet — refresh */ }
   return true;
 }
 
-function spawnRefresh(file) {
-  if (!refreshWillRun(file)) return;
+// With priming on, refresh now rather than after the throttle when the cached facts were
+// recalled on another branch, or the cache was written while priming was still off.
+function needsRefreshNow(cache, cfg) {
+  const m = cache && cache.memory;
+  if (!m || !pc.hookFlag(cfg, HOOK_ID, 'memoryPrime', 'BIFROST_MEMORY_PRIME', false)) return false;
+  return m.skipped === 'prime-off' || (m.head !== undefined && m.head !== headRef(projectDir()));
+}
+
+function spawnRefresh(file, force) {
+  if (!refreshWillRun(file, Date.now(), force)) return;
   try {
     spawn(
       process.execPath,
-      [path.join(__dirname, 'refresh.cjs'), file, projectQuery()],
+      [path.join(__dirname, 'refresh.cjs'), file, '--dir', projectDir()],
       { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
     ).unref();
   } catch (_) {}
@@ -793,7 +820,8 @@ function main() {
     // Computed once, before anything renders, so every "a refresh is running" claim in
     // this session agrees with what spawnRefresh will actually do at the end of main().
     let refreshing = false;
-    try { refreshing = refreshWillRun(file); } catch (_) {}
+    const force = needsRefreshNow(cache, cfg);
+    try { refreshing = refreshWillRun(file, Date.now(), force); } catch (_) {}
 
     try { emitPolicy(cfg); } catch (_) {}
     try { emitSkills(cache, cfg, use); } catch (_) {}
@@ -803,7 +831,7 @@ function main() {
     try { emitConfigNotice(); } catch (_) {}
     try { emitStaleNotice(file, cache, disc); } catch (_) {}
     try { emitCollisionNotice(); } catch (_) {}
-    spawnRefresh(file);
+    spawnRefresh(file, force);
   } catch (_) { /* silent-fail — never block session start */ }
   exitWhenFlushed();
 }
@@ -811,4 +839,4 @@ function main() {
 if (require.main === module) main();
 
 // Exported so tests drive the real implementation rather than a copy of it.
-module.exports = { cacheFile, safeUrl, projectQuery };
+module.exports = { cacheFile, safeUrl, buildQuery };

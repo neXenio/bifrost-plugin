@@ -2,6 +2,84 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.8.0] — 2026-10-08
+
+**Session-start fact priming is now off by default.** The header still prints the
+memory recall and store guidance, but no facts are injected and the refresh worker makes
+no `memory_search` call at session start (no query, no git lookups, no KB recall).
+Set `BIFROST_MEMORY_PRIME=1`, or the `memoryPrime` field of the signed plugin config,
+to opt back in.
+
+- Why: a replay of 770 real hook calls against the live corpus, judged by usefulness
+  ("would help someone starting work here"), found about 0.24 useful items per session,
+  and about 0.1 counting only items the directory had not already received. On
+  production-style queries (repo, ticket and branch words) four boilerplate ids filled
+  55% of the item slots, and two directories received the same 4 to 5 ids on every
+  session. The agent's own query, once it knows the task, does better, so the guidance
+  tells it to search then.
+- Turning it back on by default needs an A/B test with two measures: the rate of
+  follow-up `memory_search` calls in the first part of a session, and whether the
+  injected ids are later retrieved or used. Without a gain on both, it stays off.
+- Off means off: facts already in a cache are not rendered, and the refresh worker
+  does not carry them forward. The "Needs attention" maintenance line, which rode
+  along on the session-start search, is not produced either while priming is off.
+- With priming on, facts are shown only for the branch they were recalled on. The
+  cache records HEAD (read from `.git`, no process spawn); after a branch switch the
+  old facts are hidden and the refresh runs at once instead of after the hourly
+  throttle. Cache writes go through a temp file and a rename.
+- The query no longer leaks credentials: userinfo is stripped from remote URLs, a
+  remote with a host and no path names no repo, and a name that still contains `@` is
+  dropped. Git runs with `LC_ALL=C` so the "not a git repository" check works in any
+  locale. A failed git call keeps the cached facts instead of searching on the bare
+  directory name. The README now says what the query contains, including branch words
+  that can hold user names.
+- The client-side floor now fails closed. While `BIFROST_MEMORY_MIN_SIM` or
+  `BIFROST_MEMORY_RELATIVE_FLOOR` is above 0 (the default), rows with no numeric score
+  are dropped instead of being appended after the scored ones. The exclusion list is
+  applied in every parse path: nested wrappers such as `{"data":{"results":[...]}}`,
+  `{"result":[...]}` and MCP text content blocks are unwrapped, and the regex
+  fallback's rows count as unscored.
+
+**Recall queries now come from the project, and sessions without project signal skip
+recall.** The memory query used to be the directory name plus a fixed "recent
+decisions, gotchas, conventions, open work" suffix. Directory names like `.cursor`,
+`full_context`, `Desktop` or a home directory produced generic queries that pulled
+unrelated chatter.
+
+- The query is built from the git remote name (else toplevel, else directory name),
+  the ticket key in the branch or directory name, and up to five branch words, with
+  duplicates removed. A ticket key alone is not a signal: in a replay of 770 real hook
+  calls, queries that were only a key (179 calls) matched short company facts and none
+  of the 25 judged results was relevant. With no repo name and no topic word the query
+  is empty, recall is skipped and previously cached facts are not carried forward.
+- Ticket keys match exact case only (`LUCA-123`, also in `LUCA-123_foo`), so
+  `fix-login-2`, `hotfix-1234`, `bump-node-18` and `utf-8` are no longer read as keys.
+  A repo rooted at `$HOME` is ignored, remote name included. A remote name that is
+  empty or purely numeric (`ssh://git@host:2222/`) is ignored.
+- The git lookups moved out of the 5 s SessionStart hook. session-start now runs
+  `refresh.cjs <cacheFile> --dir <projectDir>` and the detached worker builds the
+  query, with a 2 s timeout per git call. A git timeout or error (anything other than
+  "not a git repository") is not treated as "no signal": the cache is not marked
+  skipped and the normal carry-forward keeps the previous facts. The old form
+  `refresh.cjs <cacheFile> <query>` still works.
+- The cache carries `v: 2`. session-start does not render facts from a cache without
+  it (skills, server and mode are still used), so facts from the old generic query or
+  from before the exclusion list are not shown after upgrading, and are not carried
+  forward either.
+- Scoring prefers `similarity`, then `score`, then `relevance`. luca-memory's
+  `relevance` is an RRF value (about 0.016 to 0.075) and never clears the floor, so a
+  server without a `similarity` field injects nothing.
+- Rows are dropped client side when the wing (on provenance or the item) is
+  `screenpipe` or `personal`, the source type is `screenpipe` or `claude-session`, the
+  scope is `private`, or any tag is `session-summary`, `source:screenpipe`,
+  `source:email` or `source:superhuman`. Tags are the union of provenance, item and
+  metadata tags (array or comma string), and a string provenance is scanned for the
+  same markers. Tags `source:conversation` and `session:*` are kept, since
+  `/reflect-all` stores durable facts under them.
+- `BIFROST_MEMORY_MIN_SIM` defaults to 0.55 and applies to the `similarity` cosine
+  field. Chosen from the 770-call replay: judged precision about 0.82 at 0.55 vs 0.73
+  at 0.45.
+
 ## [1.7.3] — 2026-08-19
 
 **Weak recall is no longer injected, and the section may now be empty.** Measured

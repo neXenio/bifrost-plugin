@@ -135,9 +135,11 @@ After install and restart:
   or via `claude mcp add` (explicit installer/command) — it never edits Claude
   Code config files directly.
 - The SessionStart hook contacts your gateway in a detached background worker
-  (at most once per hour) to refresh cached recall; the query contains only the
-  project directory basename plus a fixed recall phrase. Set `BIFROST_REFRESH=0`
-  to disable all session-start-initiated network traffic.
+  (at most once per hour) to refresh cached skill and memory metadata. By default
+  it sends no recall query (fact priming is off). With `BIFROST_MEMORY_PRIME=1` the
+  query is the repository name, a ticket key and up to five branch-name words, which
+  can include user names. Set `BIFROST_REFRESH=0` to disable all session-start-initiated
+  network traffic.
 
 ## Uninstall
 
