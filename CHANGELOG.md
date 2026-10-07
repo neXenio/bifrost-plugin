@@ -4,6 +4,42 @@ All notable changes to bifrost-plugin are documented here.
 
 ## Unreleased
 
+**Session-start fact priming is now off by default.** The header still prints the
+memory recall and store guidance, but no facts are injected and the refresh worker makes
+no `memory_search` call at session start (no query, no git lookups, no KB recall).
+Set `BIFROST_MEMORY_PRIME=1`, or the `memoryPrime` field of the signed plugin config,
+to opt back in.
+
+- Why: a replay of 770 real hook calls against the live corpus, judged by usefulness
+  ("would help someone starting work here"), found about 0.24 useful items per session,
+  and about 0.1 counting only items the directory had not already received. On
+  production-style queries (repo, ticket and branch words) four boilerplate ids filled
+  55% of the item slots, and two directories received the same 4 to 5 ids on every
+  session. The agent's own query, once it knows the task, does better, so the guidance
+  tells it to search then.
+- Turning it back on by default needs an A/B test with two measures: the rate of
+  follow-up `memory_search` calls in the first part of a session, and whether the
+  injected ids are later retrieved or used. Without a gain on both, it stays off.
+- Off means off: facts already in a cache are not rendered, and the refresh worker
+  does not carry them forward. The "Needs attention" maintenance line, which rode
+  along on the session-start search, is not produced either while priming is off.
+- With priming on, facts are shown only for the branch they were recalled on. The
+  cache records HEAD (read from `.git`, no process spawn); after a branch switch the
+  old facts are hidden and the refresh runs at once instead of after the hourly
+  throttle. Cache writes go through a temp file and a rename.
+- The query no longer leaks credentials: userinfo is stripped from remote URLs, a
+  remote with a host and no path names no repo, and a name that still contains `@` is
+  dropped. Git runs with `LC_ALL=C` so the "not a git repository" check works in any
+  locale. A failed git call keeps the cached facts instead of searching on the bare
+  directory name. The README now says what the query contains, including branch words
+  that can hold user names.
+- The client-side floor now fails closed. While `BIFROST_MEMORY_MIN_SIM` or
+  `BIFROST_MEMORY_RELATIVE_FLOOR` is above 0 (the default), rows with no numeric score
+  are dropped instead of being appended after the scored ones. The exclusion list is
+  applied in every parse path: nested wrappers such as `{"data":{"results":[...]}}`,
+  `{"result":[...]}` and MCP text content blocks are unwrapped, and the regex
+  fallback's rows count as unscored.
+
 **Recall queries now come from the project, and sessions without project signal skip
 recall.** The memory query used to be the directory name plus a fixed "recent
 decisions, gotchas, conventions, open work" suffix. Directory names like `.cursor`,
