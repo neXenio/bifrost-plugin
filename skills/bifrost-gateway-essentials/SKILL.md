@@ -58,8 +58,9 @@ time), and `tenant`/`role`/`vk` are schema errors rather than ignored inputs.
 `memory_search` and `memory_store` are the whole of normal use. Everything else —
 statistics, reading a memory's markdown body, corrections, linking, pruning — sits
 behind `memory_call(action=...)`, namespaced so the prefix is the contract: `evolve.*`
-changes the corpus, `meta.*` only reads it. That is the advanced surface; reach for it
-deliberately rather than as part of a recall-then-store loop. A graph walk needs no such
+changes the corpus, `meta.*` only reads it. That is the advanced surface, and on a shared gateway it is admin-only: colleague keys
+get `memory_search` and `memory_store` and nothing else. Reach for it deliberately rather
+than as part of a recall-then-store loop. A graph walk needs no such
 call: it is `memory_search(scope="graph")`.
 
 Read the return value rather than assuming success. Expect `stored` or `queued`, and

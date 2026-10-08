@@ -52,7 +52,7 @@ nothing is the right outcome then — a corpus padded with restatements of the
 task is worse than a smaller one.
 
 **If a search turns up something wrong:** correcting it is worth more than adding
-to it. Where the gateway exposes them, `memory_call` actions such as
+to it. Where the gateway exposes them (on a shared gateway only to admin keys), `memory_call` actions such as
 `evolve.edit` (correct a fact), `evolve.invalidate` (retire an outdated one) and
 `evolve.link` (relate two) are how that happens. A store that only ever appends
 accumulates contradictions no reader can resolve.
