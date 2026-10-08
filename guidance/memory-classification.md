@@ -267,6 +267,9 @@ Unverified at the time of writing. Each one changes how this page should read.
      the neighbourhood for the caller to re-store. It is not a delete and should not be
      counted as one.
 
+   All three `memory_call` actions are admin-only on a shared gateway; a colleague key
+   gets `memory_search` and `memory_store` only.
+
    Until someone runs those, "permanent" above is the safe reading and should stay — an
    unexercised correction path is not a working one.
 6. **Retention and re-review cadence.** None defined. A corpus that is never re-read
