@@ -16,7 +16,8 @@ Promotion is publication. A fact promoted into the shared memory corpus is:
    field, so every hit already reports whether it is expired;
    `memory_call(action="evolve.purge_noise")` tombstones cards. (Inspecting a memory,
    `meta.inspect`, is not one of these: it returns the neighbourhood for the caller to
-   re-store, it does not delete.) None of it has
+   re-store, it does not delete.) `memory_call` is admin-only on the shared gateway, so
+   for a colleague key none of this is reachable at all. None of it has
    ever been used: the corpus has still never recorded a correction. An unexercised
    correction path is not a working one, so assume you cannot take it back.
 
@@ -253,6 +254,9 @@ Unverified at the time of writing. Each one changes how this page should read.
      exist in the graph and all three sit at zero. Test: does writing one actually
      change what a plain `memory_search` returns, or is it inert metadata that only a
      graph query can see?
+   All three `memory_call` checks below need an admin key: on the shared gateway
+   `memory_call` is admin-only, and colleague keys get `memory_search` and
+   `memory_store` only.
    - **`memory_call(action="evolve.purge_noise")`.** It tombstones cards. Test: is a
      tombstoned card gone from recall, and is it gone from the provider's side or only
      from this index? It applies immediately; there is no rehearsal mode.
