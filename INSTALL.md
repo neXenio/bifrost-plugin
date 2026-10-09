@@ -116,7 +116,7 @@ Run:
 It walks through the same `claude mcp add` registration (or, if your gateway
 operator has configured an SSO keyapp via `BIFROST_KEYAPP_URL`, offers the
 browser-based key provisioning flow). Onboarding only ever runs when you
-invoke this command explicitly — the plugin never launches it on its own.
+invoke this command explicitly — the plugin never launches it on its own. (The opt-in `auto_login` sign-in is separate; see "What the plugin touches" below.)
 
 ## Verify
 
@@ -124,15 +124,21 @@ After install and restart:
 
 1. Open a new Claude Code session — you should see bifrost context injected at session start.
 2. Type: `"implement a new feature"` — expect a skill-discovery hint pointing at the gateway's skill-search tool.
-3. If your gateway exposes a skill server, call `mcp__bifrost__<skills-server>-skill_search` with any task description — it should return matches.
+3. If your gateway exposes a skill server, call the skill-search tool (`mcp__plugin_bifrost-plugin_bifrost__<skills-server>-skill_search` from the plugin, `mcp__bifrost__…` only for a hand-added server, `mcp__claude_ai_<Name>__…` via the claude.ai connector) with any task description — it should return matches.
 4. If your gateway exposes a memory server, call the memory search tool before a task and the memory store tool after — run `/mcp` to see which tools are available.
 
 ## What the plugin touches on your machine
 
-- Reads/writes its own cache under `~/.cache/bifrost-plugin/` only.
+- Reads/writes its own cache under `~/.cache/bifrost-plugin/` only, plus the two
+  opt-in exceptions below.
 - Registers the `bifrost` MCP server via its shipped `.mcp.json` (plugin path)
-  or via `claude mcp add` (explicit installer/command) — it never edits Claude
-  Code config files directly.
+  or via `claude mcp add` (explicit installer/command). By default it never edits
+  Claude Code config files directly.
+- Opt-in, both off by default. With `auto_login` on, a session may open the
+  browser once for sign-in (`hooks/auto-setup.cjs`) and the key is cached in
+  `~/.cache/bifrost-plugin/vk`; the sign-in worker rewrites this plugin's entry in
+  `~/.claude/mcp-needs-auth-cache.json`. With `migrate_legacy` on, it runs
+  `claude mcp remove` for a hand-added bifrost server.
 - The SessionStart hook contacts your gateway in a detached background worker
   (at most once per hour) to refresh cached skill and memory metadata. By default
   it sends no recall query (fact priming is off). With `BIFROST_MEMORY_PRIME=1` the

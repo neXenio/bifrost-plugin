@@ -167,26 +167,29 @@ removes the gate entirely and is the real fix.
 ## 9. Claude Desktop OAuth does not complete
 
 A virtual key is the one auth path verified fully working on Desktop, on every
-tab, with no shell environment at all. Leaving `virtual_key` blank at install
-falls back to OAuth against the identity provider named in the plugin's OAuth
-config (`idms.nexenio.com/realms/nexenio`), and that path has two known
-identity-provider-side failures before login even starts.
+tab, with no shell environment at all. Since 1.9.0 the plugin ships no OAuth
+config, so a blank `virtual_key` no longer falls back to OAuth. The blank-key
+paths are `auto_login` (browser sign-in, key cached locally) or the claude.ai
+org connector. The OAuth failures below show up on the connector path and on a
+hand-added server that uses OAuth against the identity provider
+(`idms.nexenio.com/realms/nexenio`), which has two known identity-provider-side
+failures before login even starts.
 
-1. **Check the resource-server side of discovery** (this part works):
+1. **Check the resource-server side of discovery** (diagnostic only; this part works):
    ```bash
    curl -s https://bifrost.culture4.life/.well-known/oauth-protected-resource
    # → 200, authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]
    curl -si https://bifrost.culture4.life/mcp | grep -i www-authenticate
    # → Bearer resource_metadata="https://bifrost.culture4.life/.well-known/oauth-protected-resource"
    ```
-2. **Check the authorization-server side** (this is where it fails today):
+2. **Check the authorization-server side** (diagnostic only; this is where it fails today):
    ```bash
    curl -s https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration \
      | grep registration_endpoint
    ```
    No `registration_endpoint` in the response is why dynamic client
    registration fails. See the symptom map below for the exact error text.
-3. **The plugin no longer ships an OAuth client ID option** (removed in 1.8.0:
+3. **The plugin no longer ships an OAuth client ID option** (removed in 1.9.0:
    Claude Code never substituted it, Keycloak received the literal
    placeholder). In `/mcp`, do not pick `Authenticate` for the plugin's
    bifrost server; use a virtual key or `auto_login` and pick `Reconnect`.
@@ -196,7 +199,7 @@ identity-provider-side failures before login even starts.
 
 Fix, in order of what you control. Use a virtual key: it works today and needs
 no identity-provider change, or turn on `auto_login`. The plugin ships no OAuth
-config since 1.8.0, so there is no client ID to paste.
+config since 1.9.0, so there is no client ID to paste.
 
 ## Symptom → cause map
 

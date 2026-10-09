@@ -80,7 +80,7 @@ issued you), and the opt-in `auto_login` switch. Change any of these later
 with `/plugin configure`.
 
 Without a virtual key, `auto_login` fetches one through company sign-in. The
-plugin ships no OAuth config since 1.8.0 (Claude Code never filled in its
+plugin ships no OAuth config since 1.9.0 (Claude Code never filled in its
 client ID). See `/bifrost-debug` step 9.
 
 ### Legacy fallback: local `mcp-remote` proxy

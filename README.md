@@ -97,7 +97,7 @@ is live.
 With `auto_login` on and `virtual_key` blank, the first interactive session
 opens the company sign-in page once and caches the key it gets back in
 `~/.cache/bifrost-plugin/vk`. The plugin no longer ships an `oauth` block in
-`.mcp.json` (removed in 1.8.0): Claude Code never substituted
+`.mcp.json` (removed in 1.9.0): Claude Code never substituted
 `${user_config.oauth_client_id}` inside it, so Keycloak always received the
 literal placeholder, and it offered a second, broken sign-in path next to the
 working one. A wrong key returns a 401 with no `WWW-Authenticate` header;
@@ -489,7 +489,7 @@ After install, enable, and restart:
 
 **Hooks not firing** — hooks ship inside the plugin (`hooks/hooks.json`, auto-loaded by Claude Code). Confirm installed + enabled via `/plugin`, then restart.
 
-**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old ephemeral tunnel link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping).
+**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old ephemeral tunnel link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping). The plugin itself no longer uses OAuth (since 1.9.0); use a virtual key or `auto_login`.
 
 Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` diagnosis flow.
 
@@ -519,8 +519,13 @@ Memory: agent calls <prefix><memory-server>-search before tasks,
 **Tool names.** `<prefix>` depends on how the gateway is connected: `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server (which hides the plugin's). The injected session context names the one that applies.
 
 All hooks silent-fail: any error exits 0 silently so they never block a prompt.
-Hooks write only to their own cache under `~/.cache/bifrost-plugin/` — they
+By default hooks write only to their own cache under `~/.cache/bifrost-plugin/` and
 never touch Claude Code configuration, launch other programs, or open browsers.
+Two opt-in options, both off by default, change that. With `auto_login` on, a session
+may open the browser once for company sign-in (`hooks/auto-setup.cjs`) and the key it
+gets back is cached in `~/.cache/bifrost-plugin/vk`; the sign-in worker also rewrites
+this plugin's entry in `~/.claude/mcp-needs-auth-cache.json`. With `migrate_legacy` on,
+it runs `claude mcp remove` for a hand-added bifrost server.
 The background cache refresh contacts the gateway at most once per hour
 (`BIFROST_REFRESH=0` disables it). By default it sends no query at all: session-start
 fact priming is off, so the worker only learns which skills and memory tools the

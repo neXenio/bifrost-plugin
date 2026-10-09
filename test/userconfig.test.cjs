@@ -10,7 +10,7 @@
 // test below exists to catch, and it walks .mcp.json instead of assuming where a
 // placeholder might appear.
 //
-// 1.8.0 removed the oauth block and its oauth_client_id option. Verified on Claude Code
+// 1.9.0 removed the oauth block and its oauth_client_id option. Verified on Claude Code
 // 2.1.293: ${user_config.*} is never substituted inside `oauth`, even with the option
 // saved, so Keycloak always received the literal placeholder as client_id. The test
 // at the bottom keeps it from coming back in that broken form.
@@ -97,5 +97,5 @@ test('no ${user_config.*} placeholder inside an oauth block (Claude Code never s
   // `${user_config.oauth_client_id}`. Only url, headers and headersHelper expand.
   const oauth = bifrostEntry && bifrostEntry.oauth;
   if (oauth) assert.strictEqual(collectUserConfigKeys(oauth, new Set()).size, 0);
-  assert.ok(!('oauth_client_id' in (pluginManifest.userConfig || {})), 'oauth_client_id was removed in 1.8.0');
+  assert.ok(!('oauth_client_id' in (pluginManifest.userConfig || {})), 'oauth_client_id was removed in 1.9.0');
 });

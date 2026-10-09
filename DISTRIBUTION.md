@@ -25,8 +25,11 @@ infrastructure, not the plugin.
 - **No side effects outside its own cache.** Hooks write only to
   `~/.cache/bifrost-plugin/`. Nothing edits Claude Code configuration. By
   default nothing launches other programs or opens browsers, and onboarding
-  runs via the explicit `/bifrost-setup` command. The one exception is the
-  opt-in `auto_login` option (1.8.0, off by default), covered below. The key
+  runs via the explicit `/bifrost-setup` command. The exceptions are the
+  opt-in `auto_login` option (1.9.0, off by default; opens the browser once, caches
+  the key and rewrites this plugin's entry in `~/.claude/mcp-needs-auth-cache.json`)
+  and `migrate_legacy` (off by default; runs `claude mcp remove` for a hand-added
+  bifrost server), both covered below. The key
   header is sent over HTTPS only (loopback excepted for local dev).
 - **Self-wiring.** Enabling the plugin registers the `bifrost` MCP server from the
   shipped `.mcp.json`; no installer script required (a `claude mcp add` wrapper
@@ -46,7 +49,10 @@ platform rules apply:
 2. **Submissions pass automated safety screening** on top of
    `claude plugin validate --strict`. v1.2.0 exists precisely to clear this
    screen (no config writes, no browser launches, no cache rewrites, bounded
-   opt-out network use). Both validators pass clean as of v1.2.0.
+   opt-out network use). Both validators pass clean as of v1.2.0. That claim holds
+   only with `auto_login` and `migrate_legacy` off, their default. An org build
+   that ships either one on opens a browser or runs `claude mcp remove` and
+   should be re-screened.
 
 Because the MCP endpoint is an env template (`${BIFROST_URL}`), org-managed
 MCP allowlists cannot evaluate it by hostname. For a managed rollout, pin the
@@ -56,7 +62,7 @@ via the gateway's web-user endpoint; CLI users keep `BIFROST_VK` in their
 shell). Existing `vk_…` keys keep working unchanged — the web-user endpoint is
 additive, not an auth migration.
 
-### Auto-login for org-pushed installs (1.8.0)
+### Auto-login for org-pushed installs (1.9.0)
 
 An org-required plugin arrives with an empty `virtual_key`. In the private
 mirror, set `"default": true` on `auto_login` in `.claude-plugin/plugin.json`
@@ -67,7 +73,7 @@ Headless runs (`claude -p`, SDK, `CI`) and Cowork or remote sessions never
 open a browser. A failed attempt waits 6 hours before retrying, 30 minutes
 after a sign-in that timed out.
 
-### Migrating existing users (`migrate_legacy`, 1.8.0)
+### Migrating existing users (`migrate_legacy`, 1.9.0)
 
 Two older setups keep the org-synced plugin from working, and both are common on
 machines onboarded before the plugin existed:

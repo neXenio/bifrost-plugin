@@ -87,7 +87,7 @@ plugin install itself is the setup: there is no separate registration step.
 
 Leaving the virtual key blank needs the opt-in `auto_login` option, which
 fetches the key through company sign-in. The plugin ships no OAuth config
-since 1.8.0.
+since 1.9.0.
 
 If login succeeds but requests fail with `no_virtual_key`, the operator has
 not mapped the user's identity to a virtual key yet. Ask them to add the user.

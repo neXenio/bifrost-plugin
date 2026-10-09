@@ -1,5 +1,5 @@
 'use strict';
-// Opt-in auto-login (1.8.0): the key cache, the headersHelper that feeds it to the MCP
+// Opt-in auto-login (1.9.0): the key cache, the headersHelper that feeds it to the MCP
 // connection, env() precedence, and the session-start gates that decide whether a
 // browser may open at all.
 //

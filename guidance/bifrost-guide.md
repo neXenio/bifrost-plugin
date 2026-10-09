@@ -78,7 +78,7 @@ bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
 and so on. There is no separate env-var step.
 
 Leaving the virtual key blank leaves the server unauthenticated unless
-`auto_login` fetches a key through company sign-in. Since 1.8.0 the plugin
+`auto_login` fetches a key through company sign-in. Since 1.9.0 the plugin
 ships no OAuth config: Claude Code never filled in its client ID, so that path
 could not complete. Use a virtual key or auto-login. See `/bifrost-debug` for
 the exact errors. For installs that cannot use the plugin at all, see README → Legacy

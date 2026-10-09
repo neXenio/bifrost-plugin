@@ -9,8 +9,9 @@ configured to route to.
 **BEFORE starting any non-trivial task** — implementing a feature, writing a
 migration, debugging, reviewing a PR, deploying, setting up infra, writing tests,
 or drafting docs — you MUST call the gateway's skill-search tool, typically
-**`mcp__bifrost__<skills-server>-skill_search`** (the skill server is named
-`skills` by default; set `BIFROST_SKILLS_SERVER` if your gateway names it
+**`mcp__plugin_<plugin>_bifrost__<skills-server>-skill_search`** (the plugin server;
+`mcp__bifrost__…` only for a hand-added server, `mcp__claude_ai_<Name>__…` via the claude.ai
+connector; the skill server is named `skills` by default; set `BIFROST_SKILLS_SERVER` if your gateway names it
 differently), with a short description of the task. It returns the top matching
 skills (a skill may handle the task entirely or give a specialized workflow). If
 search doesn't surface the right one, browse with the corresponding
@@ -40,11 +41,11 @@ automatic HTTP injection — memory recall and save are your responsibility as
 the agent.
 
 **Before non-trivial tasks:** call the gateway's memory search tool (typically
-`mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
+`mcp__plugin_<plugin>_bifrost__<memory-server>-search`, or the `mcp__bifrost__…` / `mcp__claude_ai_<Name>__…` form for a hand-added server or the connector) with a short query to recall relevant
 past decisions, project facts, or context (e.g. `k=5`).
 
 **After completing significant work:** save durable facts or decisions with the
-gateway's memory store tool (typically `mcp__bifrost__<memory-server>-store`).
+gateway's memory store tool (typically `mcp__plugin_<plugin>_bifrost__<memory-server>-store`, same prefix rules).
 Include: architectural decisions made, root causes of bugs found, project
 conventions learned, gotchas discovered. Exclude: transient details, secrets,
 per-file noise. Most stretches of work produce nothing durable, and storing
@@ -52,9 +53,9 @@ nothing is the right outcome then — a corpus padded with restatements of the
 task is worse than a smaller one.
 
 **If a search turns up something wrong:** correcting it is worth more than adding
-to it. Where the gateway exposes them (on a shared gateway only to admin keys), `memory_call` actions such as
-`evolve.edit` (correct a fact), `evolve.invalidate` (retire an outdated one) and
-`evolve.link` (relate two) are how that happens. With a colleague key, store the
+to it. `memory_call` actions such as `evolve.edit` (correct a fact), `evolve.invalidate`
+(retire an outdated one) and `evolve.link` (relate two) are how that happens. On a shared
+gateway they are exposed only to admin keys. With a colleague key, store the
 corrected fact with `memory_store` and name what it replaces. A store that only ever appends
 accumulates contradictions no reader can resolve.
 

@@ -45,7 +45,7 @@ function runHook(script, env, home) {
 test('.mcp.json keeps the exact bifrost server shape (name, transport, userConfig templates, auth header)', () => {
   // Since 1.5.0 the url/vk are userConfig templates rather than env-var templates
   // (${user_config.gateway_url} / ${user_config.virtual_key}, not ${BIFROST_URL} /
-  // ${BIFROST_VK}). 1.8.0 dropped the oauth block: Claude Code never substitutes
+  // ${BIFROST_VK}). 1.9.0 dropped the oauth block: Claude Code never substitutes
   // ${user_config.*} inside it, so it sent a literal client id to Keycloak. What this
   // test exists to defend is unchanged: the server is
   // still named bifrost, still type "http", still authenticates with an x-bf-vk
@@ -58,7 +58,7 @@ test('.mcp.json keeps the exact bifrost server shape (name, transport, userConfi
         type: 'http',
         url: '${user_config.gateway_url}',
         headers: { 'x-bf-vk': '${user_config.virtual_key}' },
-        // 1.8.0: dynamic header from the auto-login key cache. Prints {} when there is
+        // 1.9.0: dynamic header from the auto-login key cache. Prints {} when there is
         // no cached key, which leaves the static header above in charge.
         headersHelper: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/vk-headers.cjs"',
       },
