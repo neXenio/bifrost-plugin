@@ -84,9 +84,11 @@ corpus statistics, a memory's markdown body (`meta.get_full`), corrections, link
 pruning. Actions are namespaced and the prefix is the contract — `evolve.*` changes the
 corpus, `meta.*` only reads it — and a bare name like `"stats"` is an error rather than
 an alias. Reach for it deliberately, not as part of a normal recall-then-store loop.
-On a shared gateway `memory_call` is usually limited to admin keys; if it is refused,
+On a shared gateway `memory_call` is usually limited to admin keys: colleague keys get
+`memory_search` and `memory_store`, and a `memory_call` from them is refused. Without it,
 use `memory_search` with `detail="full"` to read the fact of a hit in full
-(it does not return a markdown body).
+(it does not return a markdown body), and fix a wrong fact by storing the corrected one
+with `memory_store`.
 
 A store returns `stored` or `queued`; `{"status":"skipped","reason":"noise"}` means the
 noise classifier dropped it, and `force=true` resends a fact it dropped wrongly. Store

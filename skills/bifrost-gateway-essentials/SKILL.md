@@ -61,7 +61,8 @@ statistics, reading a memory's markdown body, corrections, linking, pruning — 
 behind `memory_call(action=...)`, namespaced so the prefix is the contract: `evolve.*`
 changes the corpus, `meta.*` only reads it. That is the advanced surface, and on a shared gateway it is admin-only: colleague keys
 get `memory_search` and `memory_store` and nothing else. Reach for it deliberately rather
-than as part of a recall-then-store loop. A graph walk needs no such
+than as part of a recall-then-store loop. Without it, use `memory_search(..., detail="full")`
+to read a hit in full, and `memory_store` with the corrected fact to fix a wrong one. A graph walk needs no such
 call: it is `memory_search(scope="graph")`.
 
 Read the return value rather than assuming success. Expect `stored` or `queued`, and

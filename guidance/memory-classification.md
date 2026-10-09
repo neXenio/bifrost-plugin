@@ -16,7 +16,8 @@ Promotion is publication. A fact promoted into the shared memory corpus is:
    field, so every hit already reports whether it is expired;
    `memory_call(action="evolve.purge_noise")` tombstones cards. (Inspecting a memory,
    `meta.inspect`, is not one of these: it returns the neighbourhood for the caller to
-   re-store, it does not delete.) None of it has
+   re-store, it does not delete.) `memory_call` is admin-only on the shared gateway, so
+   for a colleague key none of this is reachable at all. None of it has
    ever been used: the corpus has still never recorded a correction. An unexercised
    correction path is not a working one, so assume you cannot take it back.
 
