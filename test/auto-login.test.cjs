@@ -115,6 +115,27 @@ test('headersHelper never offers the cached key to a different gateway', () => {
   assert.strictEqual(helper({}, home).stdout, '{}');
 });
 
+test('headersHelper never offers the cached key over cleartext, except to loopback', () => {
+  for (const [url, offered] of [
+    ['http://gateway.example.test/mcp', false],
+    ['http://127.0.0.1:8080/mcp', true],
+  ]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-helper-'));
+    const dir = path.join(home, '.cache', 'bifrost-plugin');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'vk'), JSON.stringify({ url, vk: 'vk_cached', at: 1 }));
+    const r = helper({ CLAUDE_CODE_MCP_SERVER_URL: url }, home);
+    assert.deepStrictEqual(JSON.parse(r.stdout), offered ? { 'x-bf-vk': 'vk_cached' } : {});
+  }
+});
+
+test('isSafeKeyapp refuses cmd.exe metacharacters', () => {
+  const { isSafeKeyapp } = require('../hooks/auto-setup.cjs');
+  assert.strictEqual(isSafeKeyapp('https://keyapp.example.test'), true);
+  assert.strictEqual(isSafeKeyapp('https://evil.example.test/x&calc.exe'), false);
+  assert.strictEqual(isSafeKeyapp('https://evil.example.test/x|calc'), false);
+});
+
 test('headersHelper survives a corrupt cache file', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bifrost-helper-'));
   const dir = path.join(home, '.cache', 'bifrost-plugin');

@@ -60,6 +60,10 @@ on.
   the option is saved, so Keycloak always received the literal placeholder as
   `client_id`. It only added a second, broken sign-in path (`/mcp` → Authenticate)
   next to the key. A saved `oauth_client_id` value is now ignored.
+- The headersHelper only hands the cached key to an https gateway, or http on
+  loopback. A keyapp URL containing a `cmd.exe` metacharacter (`& | < > ^ " %`) is
+  refused, and Windows opens the sign-in page with `rundll32
+  url.dll,FileProtocolHandler` instead of `cmd /c start`, which re-parsed the URL.
 - The installer moved from `bin/install.js` to `scripts/install.js`: claude.ai
   organization sync rejects a plugin with a top-level `bin/`. The npm
   `bifrost-plugin-install` command is unchanged.

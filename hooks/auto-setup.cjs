@@ -81,6 +81,8 @@ function isSafeKeyapp(base) {
   try {
     const u = new URL(base);
     const loopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+    // cmd.exe metacharacters: refused so no opener can ever re-parse the URL into a command.
+    if (/[&|<>^"%]/.test(u.href)) return false;
     return u.protocol === 'https:' || (u.protocol === 'http:' && loopback);
   } catch (_) {
     return false;
@@ -113,10 +115,12 @@ function openBrowser(url) {
 
 function openDefault(url) {
   try {
+    // Windows: rundll32 hands the URL to the default handler without a shell, unlike
+    // `cmd /c start`, which re-parses it.
     const cmd = process.platform === 'darwin' ? 'open'
-      : process.platform === 'win32' ? 'cmd'
+      : process.platform === 'win32' ? 'rundll32'
       : 'xdg-open';
-    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+    const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
     spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
   } catch (_) {}
 }

@@ -22,7 +22,12 @@ try {
   const norm = (s) => String(s || '').trim().replace(/\/+$/, '');
   const target = norm(process.env.CLAUDE_CODE_MCP_SERVER_URL);
   const cached = keyCache.read();
-  if (cached && target && norm(cached.url) === target) out = { 'x-bf-vk': cached.vk };
+  if (cached && target && norm(cached.url) === target) {
+    // Never hand the key to a cleartext connection, except to a loopback gateway.
+    const u = new URL(target);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+    if (u.protocol === 'https:' || (u.protocol === 'http:' && loopback)) out = { 'x-bf-vk': cached.vk };
+  }
 } catch (_) {
   out = {};
 }
