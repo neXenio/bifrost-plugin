@@ -95,6 +95,28 @@ noise classifier dropped it, and `force=true` resends a fact it dropped wrongly.
 only privacy-safe, durable facts after significant work. Use `listToolFiles()` to see
 what else the gateway exposes, and confirm server names there rather than guessing.
 
+## Fast typed decisions — `laya`
+
+If the gateway exposes a `laya` server (flat tools `${BIFROST_TOOL_PREFIX}laya-laya_*`),
+hand it the small, closed-form decisions instead of reasoning them out yourself. It is a
+self-hosted typed-decision model (Jev-compatible): one call returns a choice plus
+probabilities in tens of milliseconds and costs no LLM tokens.
+
+Use it when the answer is one of a fixed set:
+- classify or route an item: a ticket to a team, a mail to a folder, a log line to a
+  severity (`choice`);
+- a yes/no check: "does this diff touch payment code", "is this message a complaint"
+  (`noul`);
+- rate on a fixed scale: urgency, sentiment (`score`);
+- the same questions over many items: one `laya_predict_batch` call, not a loop.
+
+`laya_decide` takes a JSON schema (enums, booleans, bounded integers) and returns typed
+`values`; `laya_predict` takes Jev-style `questions`. Gate on `answer_confidence`, the
+probability of the returned answer: below about 0.8, or when it matters, decide yourself
+and treat Laya's answer as a hint. It cannot do open questions, text generation,
+arithmetic, dates or counting, and it reads at most about 20 options per question.
+Do not use it for anything a wrong answer would make irreversible.
+
 ## Onboarding / troubleshooting
 
 - `/bifrost-onboard` — first-time setup walkthrough

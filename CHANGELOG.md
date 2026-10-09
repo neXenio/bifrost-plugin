@@ -68,6 +68,11 @@ on.
   organization sync rejects a plugin with a top-level `bin/`. The npm
   `bifrost-plugin-install` command is unchanged.
 
+**Fast typed decisions.** The session context now tells the model to hand closed-form
+decisions (classify, route, yes/no, score over a fixed set) to the gateway's `laya`
+server when it exposes one, gate on `answer_confidence`, and keep open questions,
+arithmetic and irreversible calls for itself.
+
 ## [1.8.0] — 2026-10-08
 
 **Session-start fact priming is now off by default.** The header still prints the
