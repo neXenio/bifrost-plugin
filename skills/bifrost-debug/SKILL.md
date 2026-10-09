@@ -20,8 +20,8 @@ If missing: `export BIFROST_URL=https://<your-gateway-host>/mcp` and
 `export BIFROST_VK=vk_<your-key>` (add both to `~/.zshrc` or `~/.bashrc`).
 
 On Desktop and claude.ai there is no shell, so this check does not apply.
-Credentials come from the plugin's three install-time config values
-(`gateway_url`, `virtual_key`, `oauth_client_id`). Run `/plugin configure` to
+Credentials come from the plugin's install-time config values
+(`gateway_url`, `virtual_key`, and the opt-in `auto_login`). Run `/plugin configure` to
 view or change them.
 
 Symptom if the key is wrong/missing: 401 or 403 from every bifrost tool call.
@@ -49,10 +49,10 @@ Expected: 200 or 405 (OPTIONS probe). 401 → bad VK. Timeout / connection refus
 
 ## 4. Check the gateway's memory MCP tools (for agent-driven memory)
 
-Run `/mcp` and look for a memory server under `bifrost`. If present, test it:
+Run `/mcp` and look for a memory server under `bifrost`. If present, test it (`<prefix>` is `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server):
 
 ```
-mcp__bifrost__<memory-server>-search("test connection")
+<prefix><memory-server>-search("test connection")
 ```
 
 If the tool is not found, the gateway exposes no memory server — memory calls will
@@ -85,7 +85,7 @@ If the plugin is missing or disabled: re-install / re-enable it via `/plugin`
 
 If your gateway exposes a skill server, inside Claude Code call:
 ```
-mcp__bifrost__<skills-server>-skill_search("test connection")
+<prefix><skills-server>-skill_search("test connection")
 ```
 
 - Returns results → MCP and skill routing are working.
@@ -167,54 +167,53 @@ removes the gate entirely and is the real fix.
 ## 9. Claude Desktop OAuth does not complete
 
 A virtual key is the one auth path verified fully working on Desktop, on every
-tab, with no shell environment at all. Leaving `virtual_key` blank at install
-falls back to OAuth against the identity provider named in the plugin's OAuth
-config (`idms.nexenio.com/realms/nexenio`), and that path has two known
-identity-provider-side failures before login even starts.
+tab, with no shell environment at all. Since 1.9.0 the plugin ships no OAuth
+config, so a blank `virtual_key` no longer falls back to OAuth. The blank-key
+paths are `auto_login` (browser sign-in, key cached locally) or the claude.ai
+org connector. The OAuth failures below show up on the connector path and on a
+hand-added server that uses OAuth against the identity provider
+(`idms.nexenio.com/realms/nexenio`), which has two known identity-provider-side
+failures before login even starts.
 
-1. **Check the resource-server side of discovery** (this part works):
+1. **Check the resource-server side of discovery** (diagnostic only; this part works):
    ```bash
    curl -s https://bifrost.culture4.life/.well-known/oauth-protected-resource
    # → 200, authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]
    curl -si https://bifrost.culture4.life/mcp | grep -i www-authenticate
    # → Bearer resource_metadata="https://bifrost.culture4.life/.well-known/oauth-protected-resource"
    ```
-2. **Check the authorization-server side** (this is where it fails today):
+2. **Check the authorization-server side** (diagnostic only; this is where it fails today):
    ```bash
    curl -s https://idms.nexenio.com/realms/nexenio/.well-known/openid-configuration \
      | grep registration_endpoint
    ```
    No `registration_endpoint` in the response is why dynamic client
    registration fails. See the symptom map below for the exact error text.
-3. **Supplying an OAuth client ID** (the plugin's third config field, or
-   `/plugin configure`) skips self-registration and reaches a healthy "Needs
-   authentication" state. Completing the browser login from there still needs
-   the identity provider to allow the redirect URI
-   `http://localhost:51789/callback` for that client. Confirm this with your
-   gateway operator before assuming the client ID itself is wrong.
+3. **The plugin no longer ships an OAuth client ID option** (removed in 1.9.0:
+   Claude Code never substituted it, Keycloak received the literal
+   placeholder). In `/mcp`, do not pick `Authenticate` for the plugin's
+   bifrost server; use a virtual key or `auto_login` and pick `Reconnect`.
 4. **After a successful login**, the gateway maps the authenticated identity
    to a personal virtual key server-side. `no_virtual_key` at that point means
    the operator has not added you to that map yet.
 
 Fix, in order of what you control. Use a virtual key: it works today and needs
-no identity-provider change. For OAuth specifically, ask your gateway operator
-to relax the realm's Trusted Hosts policy for loopback client registration, or
-to pre-register a public client and give you its ID to paste into the OAuth
-client ID field.
+no identity-provider change, or turn on `auto_login`. The plugin ships no OAuth
+config since 1.9.0, so there is no client ID to paste.
 
 ## Symptom → cause map
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| 401 on every bifrost call | `BIFROST_VK` wrong or missing (or the plugin's `virtual_key` config wrong) | Set env var, or `/plugin configure`, then restart |
+| 401 on every bifrost call | `BIFROST_VK` wrong or missing (or the plugin's `virtual_key` config wrong, or a rotated key cached by auto-login) | Set env var, or `/plugin configure`, then restart. For a cached key: `rm ~/.cache/bifrost-plugin/vk` (the hooks also drop it on their next 401), restart to sign in again |
+| Plugin's bifrost server shows "needs authentication" right after auto-login | Claude Code remembered the earlier 401 for 15 min | `/mcp` → `bifrost` → Reconnect (not Authenticate); restarts work again once the sign-in page said connected |
 | 403 | Key valid but no permission | Contact gateway operator |
 | `skill_search` tool not found | bifrost MCP not loaded or no skill server | Check `claude mcp get bifrost` / `/mcp`; restart CC |
 | Memory tool not found | Gateway exposes no memory server | Check with gateway operator; memory is optional |
 | Gateway timeout | Gateway offline or wrong URL | Check `BIFROST_URL`; contact gateway operator |
 | Literal `${BIFROST_URL}` or `${BIFROST_VK}` shows up as a server URL or header value | Plugin version before 1.5.0 running on a surface with no shell environment (Desktop, claude.ai), so the placeholder is never resolved | Update to bifrost-plugin 1.5.0 or later |
-| `Incompatible auth server: does not support dynamic client registration` | Gateway's `/.well-known/oauth-authorization-server` has no `registration_endpoint` | Identity-provider side. Use a virtual key, or ask the operator for an OAuth client ID (step 9.3) |
-| `Policy 'Trusted Hosts' rejected request to client-registration service. Details: Host not trusted.` | Keycloak's realm Trusted Hosts policy blocks direct client registration | Identity-provider side. Ask the operator to relax Trusted Hosts for loopback, or provide a client ID |
-| Desktop: stuck at "Needs authentication" after entering an OAuth client ID | Identity provider has not allowlisted `http://localhost:51789/callback` as a redirect URI for that client | Operator: add the redirect URI to the client |
+| `Incompatible auth server: does not support dynamic client registration` | Gateway's `/.well-known/oauth-authorization-server` has no `registration_endpoint` | Identity-provider side. Use a virtual key or `auto_login` (step 9.3) |
+| `Policy 'Trusted Hosts' rejected request to client-registration service. Details: Host not trusted.` | Keycloak's realm Trusted Hosts policy blocks direct client registration | Identity-provider side. Use a virtual key or `auto_login` (step 9.3) |
 | Desktop: `no_virtual_key` after a successful login | Authenticated but not yet in the gateway's VK map | Operator: assign the user a virtual key |
 | Permission prompt on every gateway tool | Normal Claude Code behaviour — no rule pre-approves the server | Add `"mcp__plugin_bifrost-plugin_bifrost"` (and/or `"mcp__bifrost"`) to `permissions.allow` in `~/.claude/settings.json`. The plugin cannot ship this: a plugin manifest may only carry `agent` and `subagentStatusLine` settings, and a `permissions` block there validates but is dropped at load |
 | Tool exists on the gateway but not in your tool list | Server is code-mode, not flat | Call it via `executeToolCode`; `listToolFiles()` to discover. See `/bifrost-code-mode` |

@@ -35,7 +35,7 @@ function printHelp() {
     'bifrost-plugin installer — registers the Bifrost MCP server via `claude mcp add`',
     '',
     'Usage:',
-    '  BIFROST_URL=https://<gateway>/mcp node bin/install.js [--key <vk_...>] [--dry-run]',
+    '  BIFROST_URL=https://<gateway>/mcp node scripts/install.js [--key <vk_...>] [--dry-run]',
     '',
     'Options:',
     '  --key <vk>   Your Bifrost VK (virtual key). Stored in the server entry',

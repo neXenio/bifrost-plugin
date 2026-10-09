@@ -5,7 +5,7 @@ description: "Manually wire a Bifrost MCP server into Claude Code (mcp.json) whe
 
 # Manual Bifrost MCP Setup
 
-Use this when the automated installer (`node bin/install.js` / `/bifrost-setup`)
+Use this when the automated installer (`node scripts/install.js` / `/bifrost-setup`)
 can't run (no internet, policy restriction, etc.).
 
 Note: if the plugin itself is installed and enabled, none of this is needed —
@@ -63,8 +63,8 @@ claude mcp remove --scope user bifrost
 
 Desktop has no shell, so `${BIFROST_URL}` and `${BIFROST_VK}` never resolve
 there, and it does not read this project's `.mcp.json`. The supported path is
-installing the plugin itself, which prompts for the gateway URL, virtual key,
-and OAuth client ID at install time and stores them as plugin config. The
+installing the plugin itself, which prompts for the gateway URL, virtual key
+and auto-login at install time and stores them as plugin config. The
 bundled `.mcp.json` reads those back as `${user_config.gateway_url}` and so on.
 
 ### Install the plugin (preferred)
@@ -76,16 +76,12 @@ Plugins → Browse plugins → Add from a repository.
 
 Either path prompts for the gateway URL (keep the default unless your operator
 gave you a different one), a virtual key (paste the `vk_...` key your operator
-issued you), and an OAuth client ID (leave empty unless told otherwise, see
-below). Change any of these later with `/plugin configure`.
+issued you), and the opt-in `auto_login` switch. Change any of these later
+with `/plugin configure`.
 
-Signing in with a company account instead of a virtual key does not fully work
-yet. With no client ID, Claude's OAuth discovery fails outright. With an
-operator-issued client ID it gets as far as a healthy "Needs authentication"
-state, but completing login still needs the identity provider to allow the
-redirect URI `http://localhost:51789/callback` for that client. Use a virtual
-key until your gateway operator confirms OAuth is ready. See `/bifrost-debug`
-step 9 for the exact errors and their causes.
+Without a virtual key, `auto_login` fetches one through company sign-in. The
+plugin ships no OAuth config since 1.9.0 (Claude Code never filled in its
+client ID). See `/bifrost-debug` step 9.
 
 ### Legacy fallback: local `mcp-remote` proxy
 

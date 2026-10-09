@@ -20,7 +20,7 @@ From the plugin root (or use the slash command — see below):
 
 ```bash
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node "${CLAUDE_PLUGIN_ROOT}/bin/install.js" --key vk_<your-key>
+node "${CLAUDE_PLUGIN_ROOT}/scripts/install.js" --key vk_<your-key>
 ```
 
 The installer:
@@ -56,9 +56,9 @@ Run these checks to confirm everything is live:
 
 1. **MCP loaded:** type `/mcp` — `bifrost` should appear in the server list.
 2. **Skill search works:** if your gateway exposes a skill server, call
-   `mcp__bifrost__<skills-server>-skill_search` with `"test connection"` — should return results.
+   `<prefix><skills-server>-skill_search` with `"test connection"` (`<prefix>` is `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server) — should return results.
 3. **Memory tools:** if your gateway exposes a memory server, call its search tool
-   (`mcp__bifrost__<memory-server>-search`) with a short query — should return results or an empty list.
+   (`<prefix><memory-server>-search`) with a short query — should return results or an empty list.
 4. **Session context:** open a new session — the bifrost context block should appear at the top.
 
 ## Step 5 — Add the skill-discovery MUST-stanza (recommended)
@@ -82,15 +82,12 @@ plugin install itself is the setup: there is no separate registration step.
    sidebar) → Plugins → Browse plugins → Add from a repository.
 2. At the install prompt, fill in the gateway URL (keep the default unless
    the operator gave you a different one) and paste the `vk_...` virtual key
-   the operator issued you. Leave the OAuth client ID field empty unless told
-   otherwise.
+   the operator issued you.
 3. Verify: gateway tools appear in Desktop after install.
 
-Leaving the virtual key blank tries OAuth instead, and that path does not
-fully work yet without an operator-issued OAuth client ID. Even with one, the
-identity provider still needs to allow the redirect URI
-`http://localhost:51789/callback`. Recommend a virtual key for now; point to
-`/bifrost-debug` for the exact errors if the user wants to try OAuth anyway.
+Leaving the virtual key blank needs the opt-in `auto_login` option, which
+fetches the key through company sign-in. The plugin ships no OAuth config
+since 1.9.0.
 
 If login succeeds but requests fail with `no_virtual_key`, the operator has
 not mapped the user's identity to a virtual key yet. Ask them to add the user.

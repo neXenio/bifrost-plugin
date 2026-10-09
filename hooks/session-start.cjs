@@ -20,8 +20,15 @@
 //      BIFROST_REFRESH=0.
 //
 // This hook only reads/writes its own cache under ~/.cache/bifrost-plugin/. It
-// never launches other programs, opens browsers, or touches Claude Code
-// configuration — onboarding is exclusively the explicit /bifrost-setup command.
+// never touches Claude Code configuration, and by default never launches other
+// programs or opens browsers — onboarding is the explicit /bifrost-setup command.
+//
+// One opt-in exception: auto-login. When the `auto_login` plugin option (or
+// BIFROST_AUTO_LOGIN=1) is on and no key resolves from any source, a fresh interactive
+// session spawns hooks/auto-setup.cjs detached, which opens the company sign-in page
+// once and caches the returned key. It is gated hard — see autoLoginDecision — so a
+// headless run, a /clear, a recent failed attempt or a parallel session never opens a
+// browser. Off by default in the public plugin.
 //
 // One deliberate exception exists elsewhere: session-reflect.cjs creates
 // <project>/.bifrost/ for the candidate spool. That is in-workspace on purpose —
@@ -42,6 +49,8 @@ const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 const usage = require('./usage.cjs');
 const { buildQuery, headRef } = require('./lib/project-query.cjs');
+const keyCache = require('./lib/key-cache.cjs');
+const setup = require('./auto-setup.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -130,7 +139,8 @@ function emitContext() {
     const { url, vk } = gw.env();
     const filled = raw
       .replace(/\$\{BIFROST_URL\}/g, safeUrl(url))
-      .replace(/\$\{BIFROST_VK\}/g, vk ? '(configured)' : '(not configured)');
+      .replace(/\$\{BIFROST_VK\}/g, vk ? '(configured)' : '(not configured)')
+      .replace(/\$\{BIFROST_TOOL_PREFIX\}/g, gw.toolPrefix());
     process.stdout.write(filled);
   } catch (_) {}
 }
@@ -233,7 +243,7 @@ function emitSkills(cache, cfg, use) {
   if (!s || !s.server) return;
   const mode = adaptation(use, 'skills');
   const call = s.mode === 'flat'
-    ? (t) => `mcp__bifrost__${gw.flatToolName(s, t)}`
+    ? (t) => `${gw.toolPrefix()}${gw.flatToolName(s, t)}`
     : (t) => `result = ${s.server}.${t}(...)  (via executeToolCode)`;
   const count = Number.isFinite(s.count) && s.count > 0 ? s.count : null;
   const heading = count
@@ -326,7 +336,7 @@ function emitRoster(disc) {
     `## Bifrost MCP tools — ${total} tools across ${all.length} servers (code mode)`,
     '',
     'These are reachable through `executeToolCode`, NOT as flat tools, so they do not',
-    'appear in your tool list and `mcp__bifrost__<server>-<tool>` does not exist for them.',
+    `appear in your tool list and \`${gw.toolPrefix()}<server>-<tool>\` does not exist for them.`,
     'They are real and callable. If a capability looks missing, check here before',
     'answering from training data or asking the user for something the gateway knows.',
     '',
@@ -516,7 +526,7 @@ function emitMemory(cache, cfg, use, refreshing) {
   if (m.server) {
     const call = m.mode === 'code'
       ? (t) => `result = ${m.server}.${t}(...)  (via executeToolCode)`
-      : (t) => `mcp__bifrost__${gw.flatToolName(m, t)}`;
+      : (t) => `${gw.toolPrefix()}${gw.flatToolName(m, t)}`;
     lines.push(
       'This is team memory: decisions, root causes, conventions and gotchas recorded by',
       'everyone\'s agents. Recall quality depends on how specific your query is, so search',
@@ -696,9 +706,23 @@ function emitCollisionNotice() {
   );
 }
 
-function emitStaleNotice(file, cache, disc) {
+function emitStaleNotice(file, cache, disc, signingIn) {
   const { url, vk } = gw.env();
   if (!url || !vk) {
+    if (signingIn) {
+      process.stdout.write(
+        '\n🔑 Opening your browser for Bifrost sign-in. Once the page says connected, ' +
+        'run `/mcp` → bifrost → Reconnect (not Authenticate), or restart Claude Code.\n'
+      );
+      return;
+    }
+    // Another session's sign-in is still waiting in the browser.
+    const lockAt = readAt(AUTO_LOGIN_LOCK);
+    if (lockAt !== null && Date.now() - lockAt < AUTO_LOGIN_LOCK_STALE_MS) {
+      process.stdout.write('\n🔑 A Bifrost sign-in is in progress in your browser. Once the page says ' +
+        'connected, run `/mcp` → bifrost → Reconnect (not Authenticate), or restart Claude Code.\n');
+      return;
+    }
     process.stdout.write(
       '\n⚠️ Bifrost is not configured for hooks: no gateway URL/key found in the ' +
       'environment or in ~/.claude.json. Skill, memory and tool discovery are ' +
@@ -781,6 +805,204 @@ function spawnRefresh(file, force) {
   } catch (_) {}
 }
 
+// ---------------------------------------------------------------------------
+// Opt-in auto-login
+// ---------------------------------------------------------------------------
+// Opening a browser from a hook is intrusive, so every gate below has to pass, and the
+// decision is a pure function so each one is tested on its own.
+//
+// Headless detection is empirical, not guessed (Claude Code 2.1.293, clean env):
+// an interactive `claude` exports CLAUDE_CODE_SESSION_ATTENDED=1 and
+// CLAUDE_CODE_ENTRYPOINT=cli to hooks, while `claude -p` exports
+// CLAUDE_CODE_SESSION_ATTENDED=0 and CLAUDE_CODE_ENTRYPOINT=sdk-cli. Any one negative
+// signal counts as headless, and CI being set does too. The positive signal is
+// deliberately NOT `entrypoint === 'cli'`: Claude Desktop is interactive and reports
+// its own entrypoint.
+// The lock goes stale only after the worker's own 5 min timeout could have fired.
+const AUTO_LOGIN_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const AUTO_LOGIN_LOCK_STALE_MS = 6 * 60 * 1000;
+const AUTO_LOGIN_ATTEMPT = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login-attempt.json');
+const AUTO_LOGIN_LOCK = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'auto-login.lock');
+
+// The option is read through gw.pluginOption so a mirror that ships `default: true`
+// takes effect even for users who never opened the config dialog.
+function autoLoginEnabled(env = process.env) {
+  const on = (v) => /^(1|true|yes)$/i.test(String(v || '').trim());
+  return on(env.BIFROST_AUTO_LOGIN) || on(gw.pluginOption('auto_login', env));
+}
+
+function isHeadless(env = process.env) {
+  if ((env.CI || '').trim()) return true;
+  if (env.CLAUDE_CODE_SESSION_ATTENDED === '0') return true;
+  if (/^sdk/i.test(env.CLAUDE_CODE_ENTRYPOINT || '')) return true;
+  return false;
+}
+
+// Cowork and remote sessions run in a sandbox that cannot open the user's browser or
+// receive a loopback callback. The variable names come from the 2.1.293 binary.
+function isRemote(env = process.env) {
+  const set = (v) => !!(v || '').trim() && !/^(0|false)$/i.test((v || '').trim());
+  return set(env.CLAUDE_CODE_IS_COWORK) || set(env.CLAUDE_CODE_REMOTE) ||
+    /^remote/i.test(env.CLAUDE_CODE_ENTRYPOINT || '');
+}
+
+// Returns 'go' or the reason not to. `lastAttemptAt` / `lockAt` are epoch ms or null;
+// `cooldownMs` is the attempt's own cooldown (a timed-out attempt records a shorter one).
+function autoLoginDecision({ enabled, hasKey, headless, remote, source, lastAttemptAt, cooldownMs, lockAt, now = Date.now() }) {
+  if (!enabled) return 'disabled';
+  if (hasKey) return 'has-key';
+  if (headless) return 'headless';
+  if (remote) return 'remote';
+  if (source !== 'startup') return 'not-startup';
+  const cooldown = Number.isFinite(cooldownMs) ? cooldownMs : AUTO_LOGIN_COOLDOWN_MS;
+  if (Number.isFinite(lastAttemptAt) && now - lastAttemptAt < cooldown) return 'cooldown';
+  if (Number.isFinite(lockAt) && now - lockAt < AUTO_LOGIN_LOCK_STALE_MS) return 'in-flight';
+  return 'go';
+}
+
+// Null when the file is absent. A file that exists but does not parse reads as epoch 0,
+// i.e. long expired, so a torn write can never wedge the lock shut.
+function readMarker(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch (_) { return null; }
+  try {
+    const m = JSON.parse(raw);
+    return { ...m, at: Number.isFinite(m.at) ? m.at : 0 };
+  } catch (_) { return { at: 0 }; }
+}
+
+function readAt(file) {
+  const m = readMarker(file);
+  return m ? m.at : null;
+}
+
+// Take the in-flight lock. O_EXCL create, so two sessions cannot both win. A stale lock
+// (worker killed) is first renamed to a name only this process uses, which only one
+// contender can do; if what was renamed turns out to be a fresh lock (another session
+// replaced the stale one in between), it is put back and this session backs off.
+function takeLock(lockAt, token, now) {
+  if (lockAt !== null) {
+    const mine = `${AUTO_LOGIN_LOCK}.${process.pid}.${now}`;
+    try { fs.renameSync(AUTO_LOGIN_LOCK, mine); } catch (_) { return false; }
+    if (readAt(mine) !== lockAt) {
+      try { fs.linkSync(mine, AUTO_LOGIN_LOCK); } catch (_) {}
+      try { fs.unlinkSync(mine); } catch (_) {}
+      return false;
+    }
+    try { fs.unlinkSync(mine); } catch (_) {}
+  }
+  try {
+    fs.writeFileSync(AUTO_LOGIN_LOCK, JSON.stringify({ pid: process.pid, at: now, token }), { flag: 'wx' });
+    return true;
+  } catch (_) { return false; }
+}
+
+// Decide, take the lock, record the attempt, spawn. True only when a browser is on its
+// way. The lock is created with O_EXCL so two sessions starting in the same instant
+// cannot both win; a lock older than AUTO_LOGIN_LOCK_STALE_MS (worker killed) is
+// replaced. The worker releases it on exit and clears the attempt marker on success.
+function hasCachedKeyForPlugin() {
+  const cached = keyCache.read();
+  return !!(cached && gw.sameEndpoint(cached.url, setup.gatewayUrl()));
+}
+
+function maybeStartAutoLogin(input) {
+  const now = Date.now();
+  const lockAt = readAt(AUTO_LOGIN_LOCK);
+  const attempt = readMarker(AUTO_LOGIN_ATTEMPT);
+  const decision = autoLoginDecision({
+    enabled: autoLoginEnabled(),
+    // A cached key for the plugin's own gateway counts even when a stale lone
+    // BIFROST_URL keeps env() from pairing with it; otherwise every start would re-login.
+    hasKey: !!gw.env().vk || hasCachedKeyForPlugin(),
+    headless: isHeadless(),
+    remote: isRemote(),
+    source: input && input.source,
+    lastAttemptAt: attempt ? attempt.at : null,
+    cooldownMs: attempt ? attempt.cooldownMs : undefined,
+    lockAt,
+    now,
+  });
+  if (decision !== 'go') return false;
+  // The worker's own refusals, checked here first: an unconfigured or non-https keyapp
+  // must neither announce a browser nor burn the cooldown.
+  const gateway = setup.gatewayUrl();
+  const base = setup.keyappBase(gateway);
+  if (!gateway || !base || !setup.isSafeKeyapp(base)) return false;
+  try {
+    fs.mkdirSync(path.dirname(AUTO_LOGIN_LOCK), { recursive: true });
+    const token = crypto.randomBytes(8).toString('hex');
+    if (!takeLock(lockAt, token, now)) return false;
+    fs.writeFileSync(AUTO_LOGIN_ATTEMPT, JSON.stringify({ at: now }), 'utf8');
+    spawn(
+      process.execPath,
+      [path.join(__dirname, 'auto-setup.cjs')],
+      { detached: true, stdio: 'ignore', env: { ...process.env, BIFROST_AUTO_LOGIN_LOCK_TOKEN: token }, windowsHide: true }
+    ).unref();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// One identity per machine. The MCP connection prefers the cached key (headersHelper
+// output overrides the static header), the hooks prefer an explicit one, so with both
+// present they would silently act as two different users. A saved `virtual_key` is a
+// deliberate choice and wins: the cache goes. A BIFROST_URL/BIFROST_VK pair cannot
+// reach the plugin's static header, so dropping the cache would leave the MCP
+// connection with no key at all; the cache takes the env key instead.
+function cacheConflict({ cached, gateway, optVk, envUrl, envVk }) {
+  if (!cached) return 'keep';
+  if (optVk && gw.sameEndpoint(cached.url, gateway)) return 'clear';
+  if (envUrl && envVk && gw.sameEndpoint(cached.url, envUrl) && cached.vk !== envVk) return 'replace';
+  return 'keep';
+}
+
+function reconcileKeyCache(env = process.env) {
+  const cached = keyCache.read();
+  const envVk = (env.BIFROST_VK || '').trim();
+  const action = cacheConflict({
+    cached,
+    gateway: gw.pluginOption('gateway_url', env),
+    optVk: (env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY || '').trim(),
+    envUrl: (env.BIFROST_URL || '').trim(),
+    envVk,
+  });
+  if (action === 'clear') keyCache.clear();
+  else if (action === 'replace') keyCache.write(cached.url, envVk);
+}
+
+// Opt-in cleanup of pre-plugin setups (`migrate_legacy`), see migrate-legacy.cjs. At
+// most one attempt a day; the marker is written before the spawn so a crashing worker
+// cannot turn into one attempt per session.
+const MIGRATE_MARKER = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'migrate-legacy.json');
+const MIGRATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function maybeStartMigration(now = Date.now()) {
+  if (!/^(1|true|yes)$/i.test(gw.pluginOption('migrate_legacy'))) return;
+  const last = readAt(MIGRATE_MARKER);
+  if (last !== null && now - last < MIGRATE_INTERVAL_MS) return;
+  try {
+    fs.mkdirSync(path.dirname(MIGRATE_MARKER), { recursive: true });
+    fs.writeFileSync(MIGRATE_MARKER, JSON.stringify({ at: now }), 'utf8');
+    spawn(
+      process.execPath,
+      [path.join(__dirname, 'migrate-legacy.cjs')],
+      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
+    ).unref();
+  } catch (_) {}
+}
+
+function readStdin(ms) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    const timer = setTimeout(() => resolve(Buffer.concat(chunks).toString('utf8')), ms);
+    process.stdin.on('data', (c) => chunks.push(c));
+    process.stdin.on('end', () => { clearTimeout(timer); resolve(Buffer.concat(chunks).toString('utf8')); });
+    process.stdin.on('error', () => { clearTimeout(timer); resolve(''); });
+  });
+}
+
 // stdout writes to a pipe are synchronous on Linux/macOS but ASYNCHRONOUS on Windows,
 // and process.exit() does not drain pending writes. This hook emits ~9KB, well past
 // the point where a partial write is plausible, and the plugin does target Windows
@@ -794,8 +1016,26 @@ function exitWhenFlushed() {
   } catch (_) { process.exit(0); }
 }
 
+// The hook input (and with it `source`) is only read when auto-login could actually
+// fire. Every other session — in particular any session with a key — takes exactly the
+// synchronous path it always has, without touching stdin.
 function main() {
+  let wantsInput = false;
+  try { wantsInput = autoLoginEnabled() && !isHeadless() && !isRemote() && !gw.env().vk; } catch (_) {}
+  if (!wantsInput) return run(null);
+  readStdin(300).then((raw) => {
+    let input = null;
+    try { input = JSON.parse(raw); } catch (_) {}
+    run(input);
+  }, () => run(null));
+}
+
+function run(input) {
   try {
+    let signingIn = false;
+    try { reconcileKeyCache(); } catch (_) {}
+    if (input) { try { signingIn = maybeStartAutoLogin(input); } catch (_) {} }
+    try { maybeStartMigration(); } catch (_) {}
     emitEndpointMigrationNotice();
     emitContext();
     // Verified-at-write-time config, straight off disk. No network, so a slow or dead
@@ -829,7 +1069,7 @@ function main() {
     try { emitMemory(cache, cfg, use, refreshing); } catch (_) {}
     try { emitKb(cache, cfg, refreshing); } catch (_) {}
     try { emitConfigNotice(); } catch (_) {}
-    try { emitStaleNotice(file, cache, disc); } catch (_) {}
+    try { emitStaleNotice(file, cache, disc, signingIn); } catch (_) {}
     try { emitCollisionNotice(); } catch (_) {}
     spawnRefresh(file, force);
   } catch (_) { /* silent-fail — never block session start */ }
@@ -839,4 +1079,4 @@ function main() {
 if (require.main === module) main();
 
 // Exported so tests drive the real implementation rather than a copy of it.
-module.exports = { cacheFile, safeUrl, buildQuery };
+module.exports = { cacheFile, safeUrl, buildQuery, autoLoginDecision, autoLoginEnabled, isHeadless, isRemote, cacheConflict };

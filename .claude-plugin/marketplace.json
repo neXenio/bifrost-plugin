@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "bifrost-marketplace",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Marketplace for the Bifrost MCP gateway plugin for Claude Code.",
   "owner": {
     "name": "neXenio GmbH",
@@ -11,7 +11,7 @@
     {
       "name": "bifrost-plugin",
       "source": "./",
-      "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skills, agent-driven memory, onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
+      "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skills, agent-driven memory, onboarding, signed admin policy, and opt-in browser sign-in.",
       "defaultEnabled": true
     }
   ]

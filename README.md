@@ -17,8 +17,8 @@ degrades gracefully — those features simply no-op.
 | Pillar | Behavior |
 |--------|----------|
 | 1 — Plugin Lifecycle Hooks | Auto-injects recalled memory context at session start, enforces skill-discovery hints before non-trivial tasks, spools memory candidates, and tracks capability usage |
-| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting |
-| 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node bin/install.js --key vk_…` (or `/bifrost-setup`) |
+| 2 — Skill discovery | Non-trivial prompts get a hint to call the gateway's skill-search tool (`<prefix><skills-server>-skill_search`, see Tool names below) before starting |
+| 3 — One-command onboarding | `/plugin install bifrost-plugin` or `node scripts/install.js --key vk_…` (or `/bifrost-setup`) |
 | 4 — Agent-driven memory | Recalls context via gateway memory tools before non-trivial tasks and saves durable decisions after work |
 
 ### The hooks, concretely
@@ -83,11 +83,10 @@ Rotate button if it ever leaks. Your sign-in address has to be on
 permitted` after an otherwise successful login.
 
 That is the whole install for someone who does not use a terminal: get the
-key, add the plugin, paste the key. See below for the OAuth alternative,
-which would remove the key step entirely but needs one change on the
-identity provider first.
+key, add the plugin, paste the key. The opt-in `auto_login` option removes the
+paste step by fetching the key through company sign-in.
 
-### Virtual key or OAuth
+### Virtual key or sign-in
 
 The virtual key (`vk_...`, self-served from
 [https://bifrost.culture4.life/](https://bifrost.culture4.life/)) is the auth
@@ -95,43 +94,14 @@ path that works today, on every surface, with nothing set in your shell.
 Paste it into the `virtual_key` field at install time and the MCP connection
 is live.
 
-Leaving `virtual_key` blank falls back to OAuth 2.1 against the company
-Keycloak, and that part of the plugin's `.mcp.json` is wired up
-(`authServerMetadataUrl` points at Keycloak, `callbackPort` is pinned to
-`51789`), but the flow does not complete on its own yet. Verified end to end
-with a real plugin install:
-
-- `GET /.well-known/oauth-protected-resource` returns 200 with
-  `authorization_servers: ["https://idms.nexenio.com/realms/nexenio"]`, and
-  `POST /mcp` with no key returns 401 with the matching `WWW-Authenticate`
-  challenge, so the gateway side is correct.
-- A wrong key returns a 401 with no `WWW-Authenticate` header, so a bad key
-  does not fall back to OAuth. Clear the `virtual_key` field rather than
-  leaving a bad one in it.
-- With `virtual_key` and `oauth_client_id` both blank, Claude reaches the
-  Keycloak realm and then fails: `Policy 'Trusted Hosts' rejected request to
-  client-registration service. Details: Host not trusted.` The realm blocks
-  dynamic client registration. (Without the `authServerMetadataUrl` override,
-  the failure comes even earlier: `Incompatible auth server: does not
-  support dynamic client registration`, because the default authorization
-  server metadata has no `registration_endpoint`.)
-- With an `oauth_client_id` filled in, Claude reaches `Needs authentication`,
-  the healthy state that offers the browser login.
-
-So today, OAuth needs one more piece from your gateway operator: either the
-Keycloak realm's Trusted Hosts policy has to permit loopback client
-registration, or the operator pre-registers a public client and hands out
-its client ID for the `oauth_client_id` field. Until one of those is done,
-use the virtual key.
-
-> For gateway operators: a pre-registered client's redirect URI must be
-> exactly `http://localhost:51789/callback`, matching the `callbackPort`
-> pinned in `.mcp.json`.
-
-Once OAuth logs you in, the gateway maps your Keycloak identity to your
-personal virtual key server-side, so budgets and rate limits still apply. If
-you can log in but get `no_virtual_key`, ask the gateway operator to add you
-to the VK map.
+With `auto_login` on and `virtual_key` blank, the first interactive session
+opens the company sign-in page once and caches the key it gets back in
+`~/.cache/bifrost-plugin/vk`. The plugin no longer ships an `oauth` block in
+`.mcp.json` (removed in 1.9.0): Claude Code never substituted
+`${user_config.oauth_client_id}` inside it, so Keycloak always received the
+literal placeholder, and it offered a second, broken sign-in path next to the
+working one. A wrong key returns a 401 with no `WWW-Authenticate` header;
+clear the `virtual_key` field rather than leaving a bad one in it.
 
 ### Legacy fallback: Desktop local proxy
 
@@ -391,8 +361,8 @@ a thin wrapper that registers the server through Claude Code's own CLI
 git clone https://github.com/neXenio/bifrost-plugin
 cd bifrost-plugin
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>   # then persist env vars as above
-node bin/install.js --dry-run             # prints the claude mcp add command instead
+node scripts/install.js --key vk_<your-key>   # then persist env vars as above
+node scripts/install.js --dry-run             # prints the claude mcp add command instead
 ```
 
 > **macOS:** Prefer `~/.claude/settings.json` (see above) over shell profile alone.
@@ -428,7 +398,7 @@ and memory corpus, but hooks run only in the Claude Code CLI and in Desktop's Co
 and Cowork tabs. On Desktop's Chat tab and on claude.ai web, nothing is injected.
 Skill descriptions are loaded on every surface whether or not the skill is
 invoked, so that skill's description carries the parts that matter most —
-above all that a missing `mcp__bifrost__<server>-<tool>` usually means the
+above all that a missing `<prefix><server>-<tool>` usually means the
 capability is in code mode behind `executeToolCode`, not that it is absent.
 
 That is a partial substitute, not an equal one. A description can state the shape;
@@ -486,7 +456,7 @@ Marketplace installs need no registration step at all: the plugin ships this
 Claude Code prompts for at install time on every surface (see [Registration
 and connection modes](#registration-and-connection-modes)).
 
-The manual fallback (`bin/install.js`, or `/bifrost-setup`) registers a
+The manual fallback (`scripts/install.js`, or `/bifrost-setup`) registers a
 separate server at user scope via `claude mcp add --scope user`; the plugin
 never edits Claude Code config files on its own. That path still resolves
 `${BIFROST_URL}` and `${BIFROST_VK}` at runtime from Claude Code's
@@ -502,7 +472,7 @@ After install, enable, and restart:
 
 1. `/mcp` — `bifrost` should be connected; note tool prefixes (e.g. `skills-skill_search`).
 2. `/doctor` — no hook-load errors for `bifrost-plugin`.
-3. Call `mcp__bifrost__<skills-server>-skill_search` with a task description — should return matches.
+3. Call `<prefix><skills-server>-skill_search` with a task description — should return matches.
 4. Type **"bifrost debug"** or `/bifrost-debug` for the full decision tree.
 
 ---
@@ -519,7 +489,7 @@ After install, enable, and restart:
 
 **Hooks not firing** — hooks ship inside the plugin (`hooks/hooks.json`, auto-loaded by Claude Code). Confirm installed + enabled via `/plugin`, then restart.
 
-**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old ephemeral tunnel link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping).
+**Claude Desktop `mcp_registration_failed` / OAuth errors** — make sure you used the stable gateway URL (not an old ephemeral tunnel link), then run `/bifrost-debug` in Claude Code for the Desktop decision tree (PRM check, redirect-URI, audience/scope, VK mapping). The plugin itself no longer uses OAuth (since 1.9.0); use a virtual key or `auto_login`.
 
 Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` diagnosis flow.
 
@@ -540,15 +510,22 @@ Type **"bifrost not working"** in Claude Code for the guided `bifrost-debug` dia
 SessionStart      →  session-start.cjs  →  prints guidance/bifrost-context.md (~400 tokens)
 UserPromptSubmit  →  prompt-submit.cjs  →  skill-discovery hint for task-verb prompts
 
-.mcp.json (shipped)  →  bifrost MCP server  →  mcp__bifrost__<server>-<tool> (skills, memory, …)
+.mcp.json (shipped)  →  bifrost MCP server  →  <prefix><server>-<tool> (skills, memory, …)
 
-Memory: agent calls mcp__bifrost__<memory-server>-search before tasks,
-        mcp__bifrost__<memory-server>-store after significant work.
+Memory: agent calls <prefix><memory-server>-search before tasks,
+        <prefix><memory-server>-store after significant work.
 ```
 
+**Tool names.** `<prefix>` depends on how the gateway is connected: `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server (which hides the plugin's). The injected session context names the one that applies.
+
 All hooks silent-fail: any error exits 0 silently so they never block a prompt.
-Hooks write only to their own cache under `~/.cache/bifrost-plugin/` — they
+By default hooks write only to their own cache under `~/.cache/bifrost-plugin/` and
 never touch Claude Code configuration, launch other programs, or open browsers.
+Two opt-in options, both off by default, change that. With `auto_login` on, a session
+may open the browser once for company sign-in (`hooks/auto-setup.cjs`) and the key it
+gets back is cached in `~/.cache/bifrost-plugin/vk`; the sign-in worker also rewrites
+this plugin's entry in `~/.claude/mcp-needs-auth-cache.json`. With `migrate_legacy` on,
+it runs `claude mcp remove` for a hand-added bifrost server.
 The background cache refresh contacts the gateway at most once per hour
 (`BIFROST_REFRESH=0` disables it). By default it sends no query at all: session-start
 fact priming is off, so the worker only learns which skills and memory tools the

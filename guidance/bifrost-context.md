@@ -6,18 +6,20 @@ the tools, skill library, and memory your gateway exposes.
 | Item | Value |
 |------|-------|
 | MCP server | `bifrost` (from the plugin's `.mcp.json`, or user-scope via `claude mcp add`) |
+| Tool prefix | `${BIFROST_TOOL_PREFIX}` (from the claude.ai org connector instead: `mcp__claude_ai_<Name>__`, e.g. `mcp__claude_ai_luca_Bifrost__`; use whichever your tool list has) |
 | Gateway URL | `${BIFROST_URL}` |
 | Auth | `x-bf-vk` header from `${BIFROST_VK}` |
 
-> **Auth modes:** every surface authenticates with the virtual-key header above.
+> **Auth modes:** the plugin's server authenticates with the virtual-key header above.
 > The plugin collects the gateway URL and the key as install-time plugin config,
 > so Claude Desktop and claude.ai work without any shell environment. `BIFROST_URL`
 > and `BIFROST_VK` still override it for the hook layer.
 >
-> Signing in with a company account instead of a key is not available yet. The
-> gateway offers the OAuth challenge, but its authorization server does not permit
-> client registration from a desktop client, so the flow cannot complete. Use a
-> virtual key until that changes.
+> Without a key, two company sign-ins exist. In the Claude Code CLI and Desktop's
+> Code tab, the plugin's opt-in auto-login opens the company sign-in page once and
+> caches the key it gets back. In Desktop's Chat tab, claude.ai web and Cowork, the
+> org connector "luca Bifrost" signs in through company SSO; its tools are named
+> `mcp__claude_ai_luca_Bifrost__…`.
 >
 > **Surfaces:** hooks and subagents run in the Claude Code CLI and in Claude
 > Desktop's Code and Cowork tabs. They do not run in Desktop's Chat tab or in
@@ -30,8 +32,8 @@ the tools, skill library, and memory your gateway exposes.
 Run `/mcp` to see what loaded. A gateway exposes upstream servers in one of two
 modes, and **the same gateway usually mixes both**:
 
-1. **Flat tools** — callable directly, namespaced `mcp__bifrost__<server>-<tool>`
-   (e.g. `mcp__bifrost__skills-skill_search`).
+1. **Flat tools** — callable directly, namespaced `${BIFROST_TOOL_PREFIX}<server>-<tool>`
+   (e.g. `${BIFROST_TOOL_PREFIX}skills-skill_search`).
 2. **Code-mode** — most servers are *not* flat tools. They are reached through the
    meta-tool **`executeToolCode`**, which runs a short Starlark/Python snippet:
 
@@ -48,7 +50,7 @@ modes, and **the same gateway usually mixes both**:
    nothing. `for`, `if`, list comprehensions and `print()` all work at top level.
    Load the `bifrost-code-mode` skill for the full reference.
 
-If a `mcp__bifrost__<server>-<tool>` tool does not exist, the capability is almost
+If a `${BIFROST_TOOL_PREFIX}<server>-<tool>` tool does not exist, the capability is almost
 certainly code-mode — do **not** give up; use `executeToolCode`.
 
 ## Skills, memory and tools
@@ -82,9 +84,11 @@ corpus statistics, a memory's markdown body (`meta.get_full`), corrections, link
 pruning. Actions are namespaced and the prefix is the contract — `evolve.*` changes the
 corpus, `meta.*` only reads it — and a bare name like `"stats"` is an error rather than
 an alias. Reach for it deliberately, not as part of a normal recall-then-store loop.
-On a shared gateway `memory_call` is usually limited to admin keys; if it is refused,
+On a shared gateway `memory_call` is usually limited to admin keys: colleague keys get
+`memory_search` and `memory_store`, and a `memory_call` from them is refused. Without it,
 use `memory_search` with `detail="full"` to read the fact of a hit in full
-(it does not return a markdown body).
+(it does not return a markdown body), and fix a wrong fact by storing the corrected one
+with `memory_store`.
 
 A store returns `stored` or `queued`; `{"status":"skipped","reason":"noise"}` means the
 noise classifier dropped it, and `force=true` resends a fact it dropped wrongly. Store
