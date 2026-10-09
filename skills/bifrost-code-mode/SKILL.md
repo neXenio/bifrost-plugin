@@ -1,12 +1,12 @@
 ---
 name: bifrost-code-mode
-description: "Call Bifrost gateway MCP servers that are NOT exposed as flat tools, through the executeToolCode meta-tool. Triggers on 'executeToolCode', 'code mode', 'code-mode', 'listToolFiles', 'readToolFile', 'getToolDocs', 'starlark', 'tool not found on bifrost', 'no such tool mcp__bifrost__', 'how do I call gitlab/jira/grafana/sentry through the gateway', 'gateway tool missing', 'server keys'."
+description: "Call Bifrost gateway MCP servers that are NOT exposed as flat tools, through the executeToolCode meta-tool. Triggers on 'executeToolCode', 'code mode', 'code-mode', 'listToolFiles', 'readToolFile', 'getToolDocs', 'starlark', 'tool not found on bifrost', 'no such tool mcp__bifrost__', 'no such tool mcp__plugin_bifrost-plugin_bifrost__', 'no such tool mcp__claude_ai_luca_Bifrost__', 'how do I call gitlab/jira/grafana/sentry through the gateway', 'gateway tool missing', 'server keys'."
 ---
 
 # Bifrost code mode
 
 Most servers on a Bifrost gateway are **not** flat tools. They do not appear in your
-tool list and `mcp__bifrost__<server>-<tool>` does not exist for them. They are reached
+tool list and `<prefix><server>-<tool>` does not exist for them (`mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server). They are reached
 by writing a short Starlark snippet and running it with `executeToolCode`.
 
 If a capability seems missing, it is almost certainly here. Do not conclude the gateway
@@ -145,7 +145,7 @@ anything listed is genuinely callable.
 
 ## Relationship to flat tools
 
-A gateway mixes both modes. Flat tools (`mcp__bifrost__<server>-<tool>`) are already in
+A gateway mixes both modes. Flat tools (`<prefix><server>-<tool>`) are already in
 your tool list and should be called directly. Code mode is for everything else. A
 server never appears in both, so if you can see it as a flat tool, do not route it
 through `executeToolCode`.

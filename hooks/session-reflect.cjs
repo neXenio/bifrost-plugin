@@ -101,7 +101,7 @@ function shouldPrompt(sessionId, now = Date.now()) {
 function call(cap, toolFn) {
   if (!cap) return null;
   if (cap.mode === 'code') return `result = ${cap.server}.${toolFn}(...)`;
-  return `mcp__bifrost__${gw.flatToolName(cap, toolFn)}`;
+  return `${gw.toolPrefix()}${gw.flatToolName(cap, toolFn)}`;
 }
 
 // Candidates are written to a LOCAL spool, not to the shared corpus.

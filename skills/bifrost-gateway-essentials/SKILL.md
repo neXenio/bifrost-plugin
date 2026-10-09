@@ -1,6 +1,6 @@
 ---
 name: bifrost-gateway-essentials
-description: "How to actually use a Bifrost gateway: most of its servers are NOT flat tools — a missing mcp__bifrost__<server>-<tool> means the capability is in code mode, reachable by running a Starlark snippet through the executeToolCode meta-tool, with listToolFiles() to discover what exists. Search the skill library (skill_search) and the shared memory (memory_search) before non-trivial work, and store durable facts after. Read this before concluding a gateway capability is missing, and on any surface where no bifrost session context was injected."
+description: "How to actually use a Bifrost gateway: most of its servers are NOT flat tools — a missing mcp__plugin_bifrost-plugin_bifrost__ / mcp__claude_ai_luca_Bifrost__ / mcp__bifrost__ <server>-<tool> means the capability is in code mode, reachable by running a Starlark snippet through the executeToolCode meta-tool, with listToolFiles() to discover what exists. Search the skill library (skill_search) and the shared memory (memory_search) before non-trivial work, and store durable facts after. Read this before concluding a gateway capability is missing, and on any surface where no bifrost session context was injected."
 ---
 
 # Bifrost gateway essentials
@@ -21,8 +21,9 @@ only describe the shape.
 Run `/mcp` to see what loaded. A gateway exposes upstream servers in two modes,
 and the same gateway usually mixes both:
 
-1. **Flat tools** — callable directly, namespaced `mcp__bifrost__<server>-<tool>`
-   (for example `mcp__bifrost__skills-skill_search`).
+1. **Flat tools** — callable directly, namespaced `<prefix><server>-<tool>`
+   (for example `mcp__plugin_bifrost-plugin_bifrost__skills-skill_search`). `<prefix>` is
+   `mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server.
 2. **Code mode** — most servers are *not* flat tools and never appear in your tool
    list. They are reached through the meta-tool `executeToolCode`, which runs a
    short Starlark snippet:

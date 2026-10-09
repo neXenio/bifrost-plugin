@@ -7,7 +7,8 @@ configured to route to.
 **BEFORE starting any non-trivial task** — implementing a feature, writing a
 migration, debugging, reviewing a PR, deploying, setting up infra, writing tests,
 or drafting docs — you MUST call the gateway's skill-search tool, typically
-**`mcp__bifrost__<skills-server>-skill_search`** (the skill server is named
+**`mcp__plugin_bifrost-plugin_bifrost__<skills-server>-skill_search`** (`mcp__bifrost__…`
+with a hand-added server, `mcp__claude_ai_<Name>__…` via the claude.ai connector; the skill server is named
 `skills` by default; set `BIFROST_SKILLS_SERVER` if your gateway names it
 differently), with a short description of the task. It returns the top matching
 skills (a skill may handle the task entirely or give a specialized workflow). If

@@ -8,9 +8,9 @@ service, etc.) and can serve a shared skill library. Every Claude Code session
 with this plugin enabled gets:
 
 1. **Skill discovery** — non-trivial prompts receive a hint to call the gateway's
-   skill-search tool (`mcp__bifrost__<skills-server>-skill_search`) before starting,
+   skill-search tool (`<prefix><skills-server>-skill_search`) before starting,
    so existing workflows are reused.
-2. **One-command onboarding** — `node bin/install.js --key vk_…` (or the
+2. **One-command onboarding** — `node scripts/install.js --key vk_…` (or the
    `/bifrost-setup` slash command) wires the MCP entry in seconds.
 3. **Agent-driven memory** — the agent recalls relevant context before non-trivial
    tasks and saves decisions after significant work, using the gateway's memory MCP
@@ -36,7 +36,7 @@ with this plugin enabled gets:
 ```bash
 # From the plugin root:
 export BIFROST_URL=https://<your-gateway-host>/mcp
-node bin/install.js --key vk_<your-key>
+node scripts/install.js --key vk_<your-key>
 
 # Or use the slash command inside Claude Code:
 /bifrost-setup
@@ -73,17 +73,15 @@ Claude Desktop installs the plugin itself rather than reading a project's
 `.mcp.json`. Code tab: `+` button next to the prompt box → Plugins → Add
 plugin. Chat and Cowork tabs, and claude.ai web: Customize (left sidebar) →
 Plugins → Browse plugins → Add from a repository. Either path prompts for the
-same three config values as the CLI (gateway URL, virtual key, OAuth client
-ID), and the bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
+same config values as the CLI (gateway URL, virtual key, auto-login), and the
+bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
 and so on. There is no separate env-var step.
 
-Leaving the virtual key blank falls back to OAuth against the identity
-provider named in the plugin's OAuth config. That path does not fully work
-yet: without an OAuth client ID, registration fails outright, and even with an
-operator-issued client ID the identity provider still needs to allow the
-loopback redirect URI before login can finish. Use a virtual key until your
-gateway operator confirms OAuth is ready. See `/bifrost-debug` for the exact
-errors. For installs that cannot use the plugin at all, see README → Legacy
+Leaving the virtual key blank leaves the server unauthenticated unless
+`auto_login` fetches a key through company sign-in. Since 1.8.0 the plugin
+ships no OAuth config: Claude Code never filled in its client ID, so that path
+could not complete. Use a virtual key or auto-login. See `/bifrost-debug` for
+the exact errors. For installs that cannot use the plugin at all, see README → Legacy
 fallback: Desktop local proxy.
 
 ## Hooks
@@ -98,8 +96,10 @@ The plugin registers five hooks across five Claude Code events:
 | `PostToolUse` | `usage.cjs` (async) | Records which capability classes were used, for successful bifrost tool calls |
 | `PostToolUseFailure` | `usage.cjs` (async) | Same usage recording, for failed bifrost tool calls |
 
-`PostToolUse` and `PostToolUseFailure` both match only calls to
-`mcp__(bifrost|plugin_bifrost-plugin_bifrost)__.*` tools.
+`PostToolUse` and `PostToolUseFailure` both match only gateway tool calls, in all
+three namespaces: `mcp__bifrost__` (hand-added server), `mcp__plugin_<plugin>_bifrost__`
+(this plugin) and `mcp__claude_ai_<Name>__` for a claude.ai connector whose name
+contains "bifrost".
 
 All hooks are silent-fail: any error results in `exit 0` with no output. A
 crashed hook never blocks your session.
@@ -111,10 +111,10 @@ Memory is pull-only and agent-driven. There is no automatic per-prompt injection
 **How to use it:**
 
 1. **Before non-trivial tasks** — call the gateway's memory search tool (typically
-   `mcp__bifrost__<memory-server>-search`) with a short query to recall relevant
+   `<prefix><memory-server>-search`) with a short query to recall relevant
    past decisions, project facts, or context.
 2. **After completing significant work** — call the gateway's memory store tool
-   (typically `mcp__bifrost__<memory-server>-store`) to save durable facts.
+   (typically `<prefix><memory-server>-store`) to save durable facts.
    Include: decisions made, root causes found, conventions learned, gotchas
    discovered. Exclude: transient details, secrets, per-file noise.
 
@@ -132,12 +132,17 @@ Use `/bifrost-debug` inside Claude Code for guided diagnosis. Quick checklist:
 | 401 / 403 from bifrost | `BIFROST_VK` missing or wrong | Re-run setup or set `export BIFROST_VK=vk_<your-key>` |
 | No skills found | bifrost MCP not loaded, or no skill server | Check `claude mcp get bifrost` / `/mcp`; run `/bifrost-mcp-setup` |
 | Hook not firing | Plugin not installed/enabled | Re-install / re-enable via `/plugin`; restart CC (hooks ship inside the plugin, not `settings.json`) |
-| Desktop: OAuth fails before login (`Incompatible auth server` or `Trusted Hosts` errors) | Gateway or identity provider does not support Claude self-registering as an OAuth client | Use a virtual key, or ask your operator for an OAuth client ID; `/bifrost-debug` step 9 |
+| Desktop: OAuth fails before login (`Incompatible auth server` or `Trusted Hosts` errors) | Gateway or identity provider does not support Claude self-registering as an OAuth client | Use a virtual key or `auto_login`; `/bifrost-debug` step 9 |
 | Desktop: `no_virtual_key` after a successful login | Identity not yet in the gateway's VK map | Ask the gateway operator to map your email to a virtual key |
 
 ## Gateway routing reference
 
-Tools are namespaced `mcp__bifrost__<server>-<tool>`. Which servers exist depends
+Tools are namespaced `<prefix><server>-<tool>`, where the prefix depends on how the
+gateway is connected: `mcp__plugin_bifrost-plugin_bifrost__` for this plugin's own
+server, `mcp__bifrost__` for a hand-added `bifrost` server (which hides the plugin's),
+and `mcp__claude_ai_<Name>__` for the claude.ai org connector (e.g.
+`mcp__claude_ai_luca_Bifrost__`; spaces and dots become `_`). The session context
+names the one that applies. Which servers exist depends
 entirely on how your gateway is configured. Run `/mcp` to list them. Typical roles:
 
 | Need | Server role | Notes |

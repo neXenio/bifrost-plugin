@@ -927,10 +927,13 @@ test('a lone BIFROST_URL does not pair with a CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY f
   });
   assert.notStrictEqual(got.url, 'https://attacker-controlled.example/mcp',
     'the env-supplied host must not be paired with a key from CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY');
-  assert.notStrictEqual(got.vk, 'VK-OPTION',
-    'the option-supplied key must not be paired with a loose env url');
-  assert.deepStrictEqual(got, { url: 'https://real-gateway.example/mcp', vk: 'VK-REAL' },
-    'falls through to the next credential source (the MCP config pair)');
+  // Since 1.8.0 a saved key on its own pairs with the plugin's own gateway (the
+  // manifest default, an unsaved option is never exported), exactly as .mcp.json pairs
+  // it for the static header. Never with the loose env url.
+  const dflt = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8'))
+    .userConfig.gateway_url.default;
+  assert.deepStrictEqual(got, { url: dflt, vk: 'VK-OPTION' },
+    'the option-supplied key pairs with the plugin gateway, not with a loose env url');
 });
 
 // --- URL sanitization --------------------------------------------------------------

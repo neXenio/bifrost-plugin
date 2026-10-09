@@ -18,13 +18,14 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const keyCache = require('./key-cache.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DISCOVERY_CACHE = path.join(CACHE_DIR, 'discovery.json');
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h — server topology rarely changes
 
 // Hook processes are separate OS processes and do NOT inherit Claude Code's MCP
-// credential. Installing with `claude mcp add` (which is what bin/install.js and
+// credential. Installing with `claude mcp add` (which is what scripts/install.js and
 // auto-setup.cjs do) writes the gateway URL and virtual key into ~/.claude.json as
 // MCP server config, never into the environment — so every env-only lookup here
 // came back empty and the whole hook layer went silently inert. Fall back to that
@@ -63,9 +64,18 @@ function credentialFromMcpConfig() {
   return mcpCredentialCache;
 }
 
+let claudeConfigCache;
+
+function claudeConfig() {
+  if (claudeConfigCache === undefined) {
+    try { claudeConfigCache = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { claudeConfigCache = null; }
+  }
+  return claudeConfigCache;
+}
+
 function readCredentialFromMcpConfig() {
-  let cfg;
-  try { cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG, 'utf8')); } catch (_) { return null; }
+  const cfg = claudeConfig();
+  if (!cfg) return null;
 
   const usable = (s) => {
     if (!s || typeof s !== 'object') return null;
@@ -112,6 +122,53 @@ function readCredentialFromMcpConfig() {
   return null;
 }
 
+// A plugin option as hooks see it. Claude Code exports CLAUDE_PLUGIN_OPTION_<KEY> only
+// for values the user actually saved: verified on 2.1.293, a userConfig `default`
+// is substituted into .mcp.json's ${user_config.*} but never reaches the hook
+// environment. So an org-pushed install where nobody opened the config dialog sees no
+// gateway_url and no auto_login at all, and the manifest default has to be read here.
+// An empty saved value counts as unset, matching how .mcp.json treats it.
+const PLUGIN_MANIFEST = path.join(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
+let manifestDefaults;
+
+function pluginOption(key, envVars = process.env) {
+  const v = envVars[`CLAUDE_PLUGIN_OPTION_${key.toUpperCase()}`];
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (manifestDefaults === undefined) {
+    manifestDefaults = {};
+    try {
+      const uc = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8')).userConfig || {};
+      for (const [k, o] of Object.entries(uc)) {
+        if (o && o.default !== undefined && o.default !== null) manifestDefaults[k] = String(o.default);
+      }
+    } catch (_) {}
+  }
+  return manifestDefaults[key] || '';
+}
+
+// The namespace the gateway's tools carry in this session: Claude Code names them
+// mcp__<server>__<tool> with the server name sanitized ([^A-Za-z0-9_-] -> _, read from
+// the 2.1.293 binary). A hand-added `bifrost` server (user scope, or this project's
+// local scope) suppresses the plugin's own as a duplicate and is what env() reads its
+// credential from, so it keeps the legacy name. Otherwise a plugin install exposes
+// plugin:<name>:bifrost. The claude.ai org connector (mcp__claude_ai_<Name>__) cannot be
+// detected from a hook; the guidance names it as the alternative.
+function toolPrefix(envVars = process.env) {
+  const cfg = claudeConfig() || {};
+  const here = (envVars.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
+  const local = cfg.projects && cfg.projects[here] && cfg.projects[here].mcpServers;
+  const manual = (cfg.mcpServers && cfg.mcpServers.bifrost) || (local && local.bifrost);
+  const name = pluginName();
+  if (manual || !(envVars.CLAUDE_PLUGIN_ROOT || '').trim() || !name) return 'mcp__bifrost__';
+  return `mcp__plugin_${name.replace(/[^A-Za-z0-9_-]/g, '_')}_bifrost__`;
+}
+
+// This plugin's own name from plugin.json — Claude Code keys the plugin's MCP server as
+// `plugin:<name>:bifrost`, and a mirror may rename the plugin.
+function pluginName() {
+  try { return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, 'utf8')).name || ''; } catch (_) { return ''; }
+}
+
 // A gateway URL and the key that authenticates to it are ONE credential. Resolving
 // them independently would let a stale `export BIFROST_URL=…` in a shell profile pair
 // with the key from ~/.claude.json and send that key to a host it was never issued
@@ -133,12 +190,23 @@ function env() {
   // from userConfig rather than from the environment, so on a Claude Desktop install
   // — where there is no shell profile to export anything — this is the only source
   // that carries a credential at all. Paired under the same rule as the env vars
-  // above: both together, or neither.
-  const optUrl = (process.env.CLAUDE_PLUGIN_OPTION_GATEWAY_URL || '').trim();
+  // above: both together, or neither. An unsaved gateway_url is the manifest default
+  // (only saved options are exported), which is what .mcp.json pairs the key with too.
   const optVk = (process.env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY || '').trim();
+  const optUrl = optVk ? pluginOption('gateway_url') : '';
   if (optUrl && optVk) return { url: optUrl, vk: optVk };
   const cfg = credentialFromMcpConfig();
   if (cfg) return cfg;
+  // Last resort: the key the opt-in auto-login flow cached (see key-cache.cjs). Every
+  // explicit source above wins over it. The cache records which gateway the key was
+  // issued for, so the pairing rule still holds: when a gateway URL is known on its
+  // own (a lone BIFROST_URL, or the plugin's gateway_url option or its manifest
+  // default), the cached key is used only if it belongs to that same endpoint.
+  const cached = keyCache.read();
+  if (cached) {
+    const known = url || pluginOption('gateway_url');
+    if (!known || sameEndpoint(known, cached.url)) return { url: cached.url, vk: cached.vk };
+  }
   return { url: '', vk: '' };
 }
 
@@ -173,6 +241,7 @@ function rpc(method, params, timeoutMs) {
         },
       },
       (resp) => {
+        if (resp.statusCode === 401) forgetCachedKey(url, vk);
         let d = '';
         resp.on('data', (c) => (d += c));
         resp.on('end', () => resolve({ status: resp.statusCode, body: d }));
@@ -183,6 +252,18 @@ function rpc(method, params, timeoutMs) {
     req.write(payload);
     req.end();
   });
+}
+
+// A 401 with the key auto-login cached means that key is dead (rotated or revoked in
+// the key page). Drop it, and the cooldown marker with it, so the next startup signs in
+// again instead of sending the dead key forever. Only a 401 counts: a network error or
+// a 5xx says nothing about the key. A key from any other source is the user's own
+// configuration and is never touched.
+function forgetCachedKey(url, vk) {
+  const cached = keyCache.read();
+  if (!cached || cached.vk !== vk || !sameEndpoint(cached.url, url)) return;
+  keyCache.clear();
+  try { fs.unlinkSync(path.join(keyCache.cacheDir(), 'auto-login-attempt.json')); } catch (_) {}
 }
 
 // Responses may be a single JSON object or an SSE stream of `data:` lines.
@@ -393,7 +474,7 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
 // by testing the raw string against UNEXPANDED_RE.
 function expandVars(raw) {
   return String(raw == null ? '' : raw).trim()
-    .replace(/\$\{([^}]*)\}/g, (_, v) => process.env[v] || '')
+    .replace(/\$\{([^}]*)\}/g, (_, v) => (typeof process.env[v] === 'string' ? process.env[v] : ''))
     .trim();
 }
 
@@ -491,6 +572,10 @@ function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
 
 module.exports = {
   env,
+  pluginOption,
+  pluginName,
+  toolPrefix,
+  rpc,
   isIdentifier,
   getCapabilities,
   callCapability,

@@ -1,7 +1,7 @@
 {
   "name": "bifrost-plugin",
-  "version": "1.8.0",
-  "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skill discovery, agent-driven memory, one-command onboarding, signed admin policy, and OAuth 2.1 for Desktop.",
+  "version": "1.9.0",
+  "description": "Bifrost MCP gateway plugin for Claude Code and Claude Desktop: skill discovery, agent-driven memory, one-command onboarding, signed admin policy, and opt-in browser sign-in.",
   "author": {
     "name": "neXenio GmbH",
     "url": "https://github.com/neXenio/bifrost-plugin"
@@ -19,10 +19,22 @@
       "description": "Get yours at https://bifrost.culture4.life/ — sign in with your company account and the page shows your key with a copy button. First visit creates it, later visits show the same one. Paste it here.",
       "sensitive": true
     },
-    "oauth_client_id": {
+    "auto_login": {
+      "type": "boolean",
+      "title": "Sign in automatically",
+      "description": "When no virtual key is set, open your browser once at startup for company sign-in and fetch your key automatically. The key is cached on this machine only.",
+      "default": false
+    },
+    "keyapp_url": {
       "type": "string",
-      "title": "OAuth client ID (optional)",
-      "description": "Only needed when signing in with your company account and your identity provider does not allow Claude to register itself. Ask your gateway operator for the client ID to paste here."
+      "title": "Key page URL (optional)",
+      "description": "Where sign-in fetches your key. Leave empty to use the gateway's own host."
+    },
+    "migrate_legacy": {
+      "type": "boolean",
+      "title": "Clean up older Bifrost setups",
+      "description": "Once a day, move the key of a hand-added bifrost MCP server for this gateway into the plugin and remove that server, which otherwise hides the plugin's own. Off by default.",
+      "default": false
     }
   }
 }

@@ -37,7 +37,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__(bifrost|plugin_bifrost-plugin_bifrost)__.*",
+        "matcher": "mcp__(bifrost|plugin_[A-Za-z0-9-]+_bifrost|claude_ai_[A-Za-z0-9_-]*[Bb]ifrost[A-Za-z0-9_-]*?)__.*",
         "hooks": [
           {
             "type": "command",
@@ -50,7 +50,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "mcp__(bifrost|plugin_bifrost-plugin_bifrost)__.*",
+        "matcher": "mcp__(bifrost|plugin_[A-Za-z0-9-]+_bifrost|claude_ai_[A-Za-z0-9_-]*[Bb]ifrost[A-Za-z0-9_-]*?)__.*",
         "hooks": [
           {
             "type": "command",

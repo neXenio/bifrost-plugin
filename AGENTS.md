@@ -67,7 +67,7 @@ tool names.
 This repo is split into two concerns with clear boundaries.
 
 ### Manifests + MCP + Installer
-Owns: `.claude-plugin/`, `.mcp.json`, `bin/`, `commands/`, `.gitignore`, `README.md`
+Owns: `.claude-plugin/`, `.mcp.json`, `scripts/`, `commands/`, `.gitignore`, `README.md`
 
 ### Hooks + Skills + Guidance
 Owns: `hooks/`, `skills/`, `guidance/`, `AGENTS.md`

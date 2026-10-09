@@ -2,6 +2,68 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.9.0] — 2026-10-09
+
+**Opt-in auto-login.** A plugin pushed to a whole org through claude.ai arrives with
+no virtual key, because nobody filled in the install prompt. With the new
+`auto_login` option on, the first interactive session that finds no key anywhere
+opens the company sign-in page once, receives the key over the existing loopback
+callback, and caches it in `~/.cache/bifrost-plugin/vk` (0600, stored together with
+the gateway URL it belongs to). Off by default here; an internal mirror can ship it
+on.
+
+- The MCP connection picks the key up through a new `headersHelper`
+  (`hooks/vk-headers.cjs`). It prints `{}` when there is no cached key, so a key set
+  by hand in `virtual_key` keeps working through the static header.
+- The hooks read the cache as their last source, after env vars, plugin options and
+  `~/.claude.json`. A cached key is only used with the gateway it was issued for.
+- The browser only opens on a `startup` session that is not headless (`claude -p`,
+  the SDK, `CI`, Cowork and remote sessions are skipped), at most once per 6 hours
+  (30 minutes after a timed-out sign-in), and never from two
+  sessions at once. Session start stays non-blocking.
+- `auto-setup.cjs` now writes the key cache instead of running `claude mcp add`,
+  which registered a second `bifrost` server next to the plugin's own one. On macOS
+  it opens Chrome when installed, the default browser otherwise.
+- New options: `auto_login` (boolean, default false) and `keyapp_url` (defaults to the
+  gateway's own host when auto-login is on). `BIFROST_AUTO_LOGIN=1` also turns it on.
+- After the key is cached, the sign-in worker keeps deleting this plugin's entry
+  from `~/.claude/mcp-needs-auth-cache.json` for 90 seconds. Claude Code records the
+  first 401 there, seconds after the connect attempt started, and skips the server
+  for 15 minutes, so without this a restart right after sign-in came up without
+  bifrost tools. Every message now says: `/mcp` → bifrost → Reconnect (not
+  Authenticate), or restart Claude Code.
+- A 401 for the cached key (rotated or revoked in the key page) drops the cache and
+  the cooldown marker, so the next startup signs in again. Network errors and 5xx
+  never do. Manual reset: `rm ~/.cache/bifrost-plugin/vk`.
+- One identity per machine: a saved `virtual_key` for the same gateway removes the
+  cached key, and a `BIFROST_URL`/`BIFROST_VK` pair replaces it.
+- The sign-in worker waits 5 minutes instead of 90 seconds. A timed-out attempt
+  retries after 30 minutes instead of 6 hours.
+- The browser notice ("Opening your browser for Bifrost sign-in") and the cooldown
+  only happen once the keyapp is known to be configured and https. Cowork and remote
+  sessions (`CLAUDE_CODE_IS_COWORK`, `CLAUDE_CODE_REMOTE`, a `remote*` entrypoint)
+  never start a sign-in. The in-flight lock can no longer be taken over or released
+  by a second session.
+- New `migrate_legacy` option (default false): once a day, moves the key of a
+  hand-added `bifrost` server for this gateway into the key cache and removes the
+  server, which otherwise suppresses the plugin's own. A self-installed
+  `bifrost-plugin@bifrost-marketplace` next to the org-synced copy is handled by
+  managed settings, see DISTRIBUTION.md.
+- The signed-in key is cached for the plugin's `gateway_url`; a lone `BIFROST_URL`
+  (without `BIFROST_VK`) no longer decides where it may be sent.
+- Tool names in the injected context follow the session: `mcp__plugin_<plugin>_bifrost__`
+  for the plugin's own server, `mcp__bifrost__` only next to a hand-added `bifrost`
+  server, with the claude.ai connector form (`mcp__claude_ai_<Name>__`) named as the
+  alternative. Usage counting covers all three.
+- **Removed: the `oauth` block in `.mcp.json` and the `oauth_client_id` option.**
+  Claude Code 2.1.293 never substitutes `${user_config.*}` inside `oauth`, even when
+  the option is saved, so Keycloak always received the literal placeholder as
+  `client_id`. It only added a second, broken sign-in path (`/mcp` → Authenticate)
+  next to the key. A saved `oauth_client_id` value is now ignored.
+- The installer moved from `bin/install.js` to `scripts/install.js`: claude.ai
+  organization sync rejects a plugin with a top-level `bin/`. The npm
+  `bifrost-plugin-install` command is unchanged.
+
 ## [1.8.0] — 2026-10-08
 
 **Session-start fact priming is now off by default.** The header still prints the
