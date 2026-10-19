@@ -74,7 +74,7 @@ The runtime is Starlark, a Python subset.
 
 **Assign to `result`.** Nothing comes back unless you do. This is the single most
 common mistake, and it fails quietly — the call reports
-`Execution completed but produced no data`.
+`Execution completed successfully.` with no return value.
 
 ```python
 result = gitlab.create_issue(project_id="123", title="Fix webhook")   # correct
@@ -100,8 +100,31 @@ result = keys
 the practical way to debug a snippet.
 
 Supported: `def`, `for`, `if`, list comprehensions, dicts, lists, string ops,
-arithmetic. Not available: imports, file I/O, direct network calls. Reach the outside
-world only through the server functions.
+arithmetic. Not available: imports, file I/O, direct network calls, `try`/`except`,
+f-strings (use `"%s" % x`). Reach the outside world only through the server functions.
+
+**Built-in modules** (no import needed): `json.encode(obj)`, `json.decode(text)` and
+`math` (`math.sqrt`, `math.floor`, ...).
+
+**Failed calls do not abort the script.** A tool error comes back as a value with an
+`error` field, so check it before indexing:
+
+```python
+p = gitlab.get_project(project_id="123")
+if hasattr(p, "error"):
+    result = "lookup failed: %s" % p.error
+else:
+    result = p["web_url"]
+```
+
+The reply then ends with `Execution completed, but 1 nested tool call failed.`
+
+**Numbers keep their type.** Integer ids from tool results stay `int`, so `str(p["id"])`
+gives `"87265108"`, not a float.
+
+**Limits.** One script may make at most 64 tool calls. Batch or narrow the query
+instead of looping over hundreds of items. Only `print()` output and `result` come
+back; raw tool responses are not echoed, so print what you need while debugging.
 
 ## Why this beats one flat tool per call
 
@@ -142,6 +165,8 @@ anything listed is genuinely callable.
 | Execution succeeds, no value | Missing `result =` assignment |
 | Syntax error on `for`/`if` | Top-level control flow; move it into a `def` |
 | Server key undefined | Not in your key's scope — check the `Environment` block |
+| `nested tool call failed` | A call returned an error value; check `hasattr(r, "error")` |
+| Script stops after many calls | 64 tool calls per script cap; split or batch |
 
 ## Relationship to flat tools
 
