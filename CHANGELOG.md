@@ -2,6 +2,12 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.9.1] — 2026-10-20
+
+- `bifrost-code-mode` skill matches Bifrost v2.3.1: failed calls come back as a value
+  with `.error`, `json` and `math` need no import, integer ids stay `int`, and a script
+  may make at most 64 tool calls.
+
 ## [1.9.0] — 2026-10-09
 
 **Opt-in auto-login.** A plugin pushed to a whole org through claude.ai arrives with
