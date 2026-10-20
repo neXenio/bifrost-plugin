@@ -20,8 +20,8 @@
 // so anything in the cache is by construction previously-verified.
 //
 // Env:
-//   BIFROST_KEYAPP_URL          keyapp base URL (required; without it this is a no-op)
-//   BIFROST_VK                  virtual key, sent as x-bf-vk (keyapp resolves VK -> email)
+//   BIFROST_KEYAPP_URL          keyapp base URL (else `keyapp_url` option, else gateway origin)
+//   BIFROST_VK                  virtual key, sent as x-bf-vk (else any source gateway.cjs knows)
 //   BIFROST_PLUGIN_CONFIG=0     kill switch — disables this entire path
 //   BIFROST_PLUGIN_CONFIG_TTL_MS  skip even the manifest check this long after a
 //                                 successful refresh (default 15min)
@@ -33,6 +33,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
+const gw = require('./gateway.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -44,10 +45,19 @@ const SUPPORTED_SCHEMA_VERSION = 1;
 
 // ---- env ----------------------------------------------------------------
 
+// Key and gateway come from gateway.cjs, so plugin options, .mcp.json and the
+// auto-login cache all work, not only shell env. Keyapp base: BIFROST_KEYAPP_URL, else
+// the `keyapp_url` option, else the gateway's origin (the key already goes there).
 function env() {
+  const g = gw.env();
+  const vk = (process.env.BIFROST_VK || '').trim() || g.vk;
+  let keyappUrl = (process.env.BIFROST_KEYAPP_URL || gw.pluginOption('keyapp_url') || '').trim();
+  if (!keyappUrl && g.url && g.vk) {
+    try { keyappUrl = new URL(g.url).origin; } catch (_) { keyappUrl = ''; }
+  }
   return {
-    keyappUrl: (process.env.BIFROST_KEYAPP_URL || '').trim().replace(/\/+$/, ''),
-    vk: (process.env.BIFROST_VK || '').trim(),
+    keyappUrl: keyappUrl.replace(/\/+$/, ''),
+    vk,
     enabled: process.env.BIFROST_PLUGIN_CONFIG !== '0',
   };
 }
