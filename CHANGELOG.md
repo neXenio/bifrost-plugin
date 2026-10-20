@@ -2,6 +2,15 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.10.1] — 2026-10-21
+
+- **Cross-functional workflows & UX overhaul**:
+  - Session startup context banner formatted as imperative directives (`INSTRUCTION — USE THE BIFROST GATEWAY & TOOLS`).
+  - Broadened task verbs and memory guidelines beyond developer tooling to support sales, marketing, operations, and product teams (e.g. `qualify`, `prospect`, `pitch`, `outreach`, `enrich`, `propose`, `campaign`, `pipeline`, `forecast`).
+  - Emphasize multi-department platforms in routing guidance: HubSpot, Webflow, Spinach, Jira, GitLab, Sentry, Metabase, Grafana, Exa, Perplexity.
+  - Dynamically advertise a randomly selected code-mode MCP tool per session in the roster.
+  - Route hints simplified to direct gateway mappings without search engine interception.
+
 ## [1.10.0] — 2026-10-20
 
 **Hooks now drive the gateway.** Before this release the server-side hook config never

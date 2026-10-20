@@ -1,5 +1,13 @@
 # Bifrost gateway — session context
 
+> **INSTRUCTION — USE THE BIFROST GATEWAY & TOOLS**
+> You are connected to the company's Bifrost MCP gateway. You MUST follow these operational instructions:
+>
+> 1. **Search skills BEFORE acting:** Always call `skill_search(query="<task>")` and load relevant playbooks via `get_skill(name=...)` before starting non-trivial work across all domains (engineering, sales, operations, product). Follow established company procedures rather than guessing.
+> 2. **Recall memory BEFORE planning, research, or execution:** Call `memory_search(query="<topic>")` to check prior decisions, customer/lead insights, past research, and known caveats. Store durable learnings, customer context, and root causes with `memory_store(...)` after significant work.
+> 3. **Execute tools through Bifrost:** Access company services across engineering, sales, ops, and analytics (HubSpot, GitLab, Jira, Sentry, Metabase, Webflow, Spinach, Grafana, Exa, Perplexity) via `executeToolCode(code='result = <server>.<tool>(...)')`. Inspect signatures with `readToolFile(fileName="servers/<server>.pyi")`.
+> 4. **DO NOT bypass the gateway:** Never execute raw `curl`, ad-hoc CLI scripts (`glab`, `jira`, `hubspot`), or unauthenticated web requests for capabilities Bifrost already provides.
+
 You are connected to a **Bifrost MCP gateway**: a unified MCP proxy that routes to
 the tools, skill library, and memory your gateway exposes.
 
