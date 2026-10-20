@@ -229,13 +229,19 @@ it where your team already sets env, e.g. `~/.claude/settings.json`:
 Anyone still pointing at one of those hosts is then told, once per session, to move to
 `BIFROST_CANONICAL_URL`. Without it the notice never fires and users on a retired
 endpoint get no signal — which is the trade: nothing published, nothing automatic.
-| `BIFROST_KEYAPP_URL` | SSO keyapp URL — powers the explicit `/bifrost-setup` browser provisioning flow and signed plugin-config delivery | (unset — both skipped) |
-| `BIFROST_PLUGIN_CONFIG` | Set to `0` to disable signed plugin-config delivery entirely (kill switch) | (enabled when `BIFROST_KEYAPP_URL` + `BIFROST_VK` are set) |
+| `BIFROST_KEYAPP_URL` | SSO keyapp URL — powers the explicit `/bifrost-setup` browser provisioning flow and signed plugin-config delivery | `keyapp_url` option, else the gateway's origin |
+| `BIFROST_PLUGIN_CONFIG` | Set to `0` to disable signed plugin-config delivery entirely (kill switch) | (enabled whenever a key is configured) |
+| `BIFROST_PROMPT_SKILLS` | `0` turns off the per-prompt skill search (keyapp `prompt-submit.skillSearch`) | `1` |
+| `BIFROST_PROMPT_MEMORY` | `0` turns off the per-prompt memory recall (keyapp `prompt-submit.memoryRecall`) | `1` |
+| `BIFROST_PROMPT_MEMORY_MIN` | Minimum similarity for a recalled fact (keyapp `prompt-submit.memoryMinSimilarity`) | `0.55` |
+| `BIFROST_PROMPT_BUDGET_MS` | Deadline for both per-prompt searches together (keyapp `prompt-submit.budgetMs`) | `1500` |
+| `BIFROST_ROUTE_HINT` | `0` turns off the hint to use a gateway server instead of a direct API call (keyapp `route-hint.enabled`) | `1` |
+| `BIFROST_REFLECT_MEMORY_STORE` | `1` lets the end-of-session check-in store verified facts with `memory_store` (keyapp `session-reflect.memoryStore`) | `0` |
 | `BIFROST_PLUGIN_CONFIG_TTL_MS` | How long a fetched plugin-config stays fresh before the manifest is re-checked | `900000` (15 min) |
 
 ### Signed plugin-config
 
-When `BIFROST_KEYAPP_URL` and `BIFROST_VK` are set, the plugin fetches an
+Whenever a key is configured (env, plugin option or auto-login), the plugin fetches an
 Ed25519-signed, content-addressed config bundle from keyapp
 (`hooks/lib/plugin-config.cjs`). The bundle carries the administrator's hook
 config plus a tri-state (`always_on` / `available` / `off`) policy for skills and

@@ -356,7 +356,7 @@ function emitRoster(disc) {
     'Workflow — always confirm a signature before calling:',
     '',
     '  1. `listToolFiles()`                                        — the catalog',
-    '  2. `readToolFile(fileName="servers/<server>/<tool>.pyi")`   — exact parameters',
+    '  2. `readToolFile(fileName="servers/<server>.pyi")`          — exact parameters',
     '     (the parameter is `fileName`, not `path`)',
     '  3. `getToolDocs(server="<server>", tool="<tool>")`          — full docs if unclear',
     '  4. `executeToolCode(code=\'result = <server>.<tool>(param="value")\')`',

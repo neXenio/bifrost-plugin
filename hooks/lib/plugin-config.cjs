@@ -20,8 +20,8 @@
 // so anything in the cache is by construction previously-verified.
 //
 // Env:
-//   BIFROST_KEYAPP_URL          keyapp base URL (required; without it this is a no-op)
-//   BIFROST_VK                  virtual key, sent as x-bf-vk (keyapp resolves VK -> email)
+//   BIFROST_KEYAPP_URL          keyapp base URL (else `keyapp_url` option, else gateway origin)
+//   BIFROST_VK                  virtual key, sent as x-bf-vk (else any source gateway.cjs knows)
 //   BIFROST_PLUGIN_CONFIG=0     kill switch — disables this entire path
 //   BIFROST_PLUGIN_CONFIG_TTL_MS  skip even the manifest check this long after a
 //                                 successful refresh (default 15min)
@@ -33,6 +33,7 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
+const gw = require('./gateway.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -44,12 +45,31 @@ const SUPPORTED_SCHEMA_VERSION = 1;
 
 // ---- env ----------------------------------------------------------------
 
+// Keyapp base: BIFROST_KEYAPP_URL, else the `keyapp_url` option; the key then is
+// BIFROST_VK or whatever gateway.cjs resolves. Without either, the gateway's origin,
+// paired with the key gateway.cjs issued for that same gateway, so a key never goes to
+// a host it was not issued for. Cleartext is refused except on loopback.
+function safeBase(u) {
+  try {
+    const x = new URL(u);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(x.hostname);
+    return x.protocol === 'https:' || (x.protocol === 'http:' && loopback) ? u.replace(/\/+$/, '') : '';
+  } catch (_) { return ''; }
+}
+
 function env() {
-  return {
-    keyappUrl: (process.env.BIFROST_KEYAPP_URL || '').trim().replace(/\/+$/, ''),
-    vk: (process.env.BIFROST_VK || '').trim(),
-    enabled: process.env.BIFROST_PLUGIN_CONFIG !== '0',
-  };
+  const enabled = process.env.BIFROST_PLUGIN_CONFIG !== '0';
+  const explicit = (process.env.BIFROST_KEYAPP_URL || gw.pluginOption('keyapp_url') || '').trim();
+  if (explicit) {
+    const vk = (process.env.BIFROST_VK || '').trim() || gw.env().vk;
+    return { keyappUrl: safeBase(explicit), vk, enabled };
+  }
+  const g = gw.env();
+  let origin = '';
+  if (g.url && g.vk) {
+    try { origin = new URL(g.url).origin; } catch (_) {}
+  }
+  return { keyappUrl: safeBase(origin), vk: origin ? g.vk : '', enabled };
 }
 
 function ttlMs() {

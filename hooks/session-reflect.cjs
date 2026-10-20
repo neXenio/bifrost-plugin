@@ -29,6 +29,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
+const pc = require('./lib/plugin-config.cjs');
 
 // Sessions shorter than this are answering a question, not doing work worth recording.
 const MIN_TURNS_BEFORE_PROMPT = 3;
@@ -120,6 +121,13 @@ function call(cap, toolFn) {
 //
 // A local file is the one place a candidate is verifiably not recalled by anyone.
 // Promotion into the shared corpus stays a deliberate human step.
+//
+// Update (1.10.0): luca-memory now has `supersedes` (a correction retires the old
+// card), write-time dedup and a noise classifier, so the "no correction path" argument
+// above no longer holds in full. Shared writes are therefore a server knob: keyapp hook
+// `session-reflect`, field `memoryStore` (env BIFROST_REFLECT_MEMORY_STORE). Off by
+// default; when on, verified durable facts go to memory_store and anything uncertain
+// still goes to the local spool.
 // The spool lives in the PROJECT, not under ~/.cache. Two reasons, both load-bearing:
 //
 //   1. ~/.cache is regenerable-data by XDG convention. Cache cleaners delete it. The
@@ -156,7 +164,7 @@ function ensureCandidateFile(projectDir) {
   } catch (_) { return null; }
 }
 
-function reflection(caps, checkIn = 1, file = null) {
+function reflection(caps, checkIn = 1, file = null, shared = false) {
   const mem = caps && caps.memory;
   const store = call(mem, 'memory_store');
   if (!store) return null; // no memory server discovered — nothing actionable to say
@@ -178,7 +186,8 @@ function reflection(caps, checkIn = 1, file = null) {
   // the first read. An unchanging directive also competes for attention with context
   // the model has not seen. The question is what needs repeating; the rubric is not.
   if (checkIn > 1) {
-    return `**Memory check-in (${checkIn}).** Anything new worth appending to \`${spool}\`? `
+    const where = shared ? `storing with \`${store}\` (or appending to \`${spool}\` if unsure)` : `appending to \`${spool}\``;
+    return `**Memory check-in (${checkIn}).** Anything new worth ${where}? `
       + 'Same criteria as before; "nothing" is a fine answer. Do not narrate this.';
   }
 
@@ -204,14 +213,25 @@ function reflection(caps, checkIn = 1, file = null) {
     'from the code or git history, secrets or credentials, or a restatement of the task',
     'you were given.',
     '',
-    `If something qualifies, append a bullet to \`${spool}\` (it already exists, and is`,
-    'git-ignored). One self-contained claim per bullet, dated, written so it makes sense',
-    'to someone who was not in this session. Skip anything already in the file.',
-    '',
-    `This is a local file, NOT \`${store}\`, and that is deliberate: shared memory here`,
-    'has no review filter on reads, so anything written to it is recalled by every',
-    'colleague immediately as settled team knowledge, with no correction path. Promotion',
-    'is a separate step someone takes after reviewing the file (`/bifrost-candidates`).',
+    ...(shared ? [
+      `If something qualifies and you verified it, store it with \`${store}\`: a \`subject\``,
+      'and a \`text\` that stands on its own for someone reading cold. Colleagues recall it',
+      'right away, so only verified claims, never secrets, credentials, personal or customer',
+      'data. If a recalled fact turned out wrong, store the correction with `supersedes` set',
+      'to its id.',
+      '',
+      `If you are not sure yet, append a bullet to \`${spool}\` instead (local, git-ignored),`,
+      'for someone to review with `/bifrost-candidates`.',
+    ] : [
+      `If something qualifies, append a bullet to \`${spool}\` (it already exists, and is`,
+      'git-ignored). One self-contained claim per bullet, dated, written so it makes sense',
+      'to someone who was not in this session. Skip anything already in the file.',
+      '',
+      `This is a local file, NOT \`${store}\`, and that is deliberate: shared memory here`,
+      'has no review filter on reads, so anything written to it is recalled by every',
+      'colleague immediately as settled team knowledge. Promotion is a separate step',
+      'someone takes after reviewing the file (`/bifrost-candidates`).',
+    ]),
   ].join('\n');
 }
 
@@ -235,7 +255,10 @@ async function main() {
     // rather than instruct the agent to append to a path that provably does not work.
     const spool = ensureCandidateFile();
     if (!spool) return;
-    const text = reflection(caps, checkIn, spool);
+    let cfg = null;
+    try { cfg = pc.loadCached(); } catch (_) {}
+    const shared = pc.hookFlag(cfg, 'session-reflect', 'memoryStore', 'BIFROST_REFLECT_MEMORY_STORE', false);
+    const text = reflection(caps, checkIn, spool, shared);
     if (!text) return;
 
     process.stdout.write(JSON.stringify({

@@ -79,7 +79,7 @@ const http = require('http');
 
 // Minimal MCP gateway: answers initialize and tools/list, and echoes back the name of
 // any tools/call so a test can assert which tool the client actually invoked.
-function startStubGateway(toolNames, catalog) {
+function startStubGateway(toolNames, catalog, files = {}) {
   const calls = [];
   const server = http.createServer((req, res) => {
     let body = '';
@@ -93,7 +93,9 @@ function startStubGateway(toolNames, catalog) {
       } else if (msg.method === 'tools/call') {
         calls.push(msg.params && msg.params.name);
         const isCatalog = msg.params && msg.params.name === 'listToolFiles';
-        result = { content: [{ text: isCatalog && catalog ? catalog : 'ok' }] };
+        const file = msg.params && msg.params.name === 'readToolFile'
+          && files[(msg.params.arguments || {}).fileName];
+        result = { content: [{ text: isCatalog && catalog ? catalog : (file || 'ok') }] };
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
@@ -106,8 +108,8 @@ function startStubGateway(toolNames, catalog) {
   });
 }
 
-async function discoverAgainst(toolNames, catalog) {
-  const stub = await startStubGateway(toolNames, catalog);
+async function discoverAgainst(toolNames, catalog, files) {
+  const stub = await startStubGateway(toolNames, catalog, files);
   const prevUrl = process.env.BIFROST_URL;
   const prevVk = process.env.BIFROST_VK;
   process.env.BIFROST_URL = stub.url;   // loopback http is permitted by design
@@ -391,6 +393,21 @@ test('the code-mode catalog is walked even when both capabilities are flat', asy
   assert.ok(disc.roster, 'discover() must return a roster');
   assert.deepStrictEqual(Object.keys(disc.roster).sort(), ['gitlab', 'grafana']);
   assert.deepStrictEqual(disc.roster.gitlab, ['create_issue', 'search_issues']);
+});
+
+// Bifrost v2 with server-level binding lists one file per server; the tool names are
+// the `def` lines inside it. The old parser saw no tools and the roster went empty.
+test('server-level catalog files are read for their def names', async () => {
+  const { disc } = await discoverAgainst(
+    ['teamskills-skill_search', 'teammemory-memory_search', 'listToolFiles', 'readToolFile'],
+    ['servers/', '  gitlab.pyi', '  sentry.pyi'].join('\n'),
+    {
+      'servers/gitlab.pyi': '# gitlab server tools\ndef create_issue(title: str) -> dict:  # x\ndef search_issues(q: str) -> dict:\n',
+      'servers/sentry.pyi': '# Usage: def not_a_tool\ndef find_issues() -> dict:\n',
+    }
+  );
+  assert.deepStrictEqual(disc.roster.gitlab, ['create_issue', 'search_issues']);
+  assert.deepStrictEqual(disc.roster.sentry, ['find_issues']);
 });
 
 test('a gateway with no catalog yields an empty roster, not a crash', async () => {

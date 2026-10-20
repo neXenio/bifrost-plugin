@@ -360,3 +360,37 @@ test('this plugin satisfies the live gateway minBootstrapVersion', () => {
     `plugin ${pc.pluginVersion()} < required ${LIVE.manifest.minBootstrapVersion} — the gateway would refuse to configure it`
   );
 });
+
+// Since 1.9 most installs carry the key only as a plugin option. Delivery used to need
+// BIFROST_KEYAPP_URL + BIFROST_VK in the shell, so nobody received config at all.
+test('env(): plugin options alone enable delivery via the gateway origin', () => {
+  const saved = { ...process.env };
+  try {
+    for (const k of ['BIFROST_KEYAPP_URL', 'BIFROST_VK', 'BIFROST_URL', 'BIFROST_PLUGIN_CONFIG', 'CLAUDE_PLUGIN_OPTION_KEYAPP_URL']) delete process.env[k];
+    process.env.CLAUDE_PLUGIN_OPTION_VIRTUAL_KEY = 'sk-bf-option-only';
+    process.env.CLAUDE_PLUGIN_OPTION_GATEWAY_URL = 'https://gw.example.test/mcp';
+    let e = pc.env();
+    assert.equal(e.vk, 'sk-bf-option-only');
+    assert.equal(e.keyappUrl, 'https://gw.example.test');
+    assert.equal(e.enabled, true);
+
+    process.env.CLAUDE_PLUGIN_OPTION_KEYAPP_URL = 'https://keys.example.test/';
+    e = pc.env();
+    assert.equal(e.keyappUrl, 'https://keys.example.test');
+
+    // A shell key without a keyapp URL never rides along to an option-paired gateway.
+    delete process.env.CLAUDE_PLUGIN_OPTION_KEYAPP_URL;
+    process.env.BIFROST_VK = 'sk-bf-shell';
+    assert.equal(pc.env().vk, 'sk-bf-option-only');
+
+    // Cleartext keyapp is refused unless loopback.
+    delete process.env.BIFROST_VK;
+    process.env.BIFROST_KEYAPP_URL = 'http://keys.example.test';
+    assert.equal(pc.env().keyappUrl, '');
+    process.env.BIFROST_KEYAPP_URL = 'http://127.0.0.1:9';
+    assert.equal(pc.env().keyappUrl, 'http://127.0.0.1:9');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});
