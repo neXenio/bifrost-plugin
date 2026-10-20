@@ -377,6 +377,18 @@ test('env(): plugin options alone enable delivery via the gateway origin', () =>
     process.env.CLAUDE_PLUGIN_OPTION_KEYAPP_URL = 'https://keys.example.test/';
     e = pc.env();
     assert.equal(e.keyappUrl, 'https://keys.example.test');
+
+    // A shell key without a keyapp URL never rides along to an option-paired gateway.
+    delete process.env.CLAUDE_PLUGIN_OPTION_KEYAPP_URL;
+    process.env.BIFROST_VK = 'sk-bf-shell';
+    assert.equal(pc.env().vk, 'sk-bf-option-only');
+
+    // Cleartext keyapp is refused unless loopback.
+    delete process.env.BIFROST_VK;
+    process.env.BIFROST_KEYAPP_URL = 'http://keys.example.test';
+    assert.equal(pc.env().keyappUrl, '');
+    process.env.BIFROST_KEYAPP_URL = 'http://127.0.0.1:9';
+    assert.equal(pc.env().keyappUrl, 'http://127.0.0.1:9');
   } finally {
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);

@@ -386,6 +386,8 @@ async function discover(timeoutMs) {
       if (tm && current && codeServers[current].length < 200) codeServers[current].push(tm[1]);
     }
     // Same caps as above. Parallel, so the whole catalog costs about one round trip.
+    // A failed read keeps the last known tools rather than dropping the server.
+    const prev = (readCache() || {}).roster || {};
     await Promise.all(serverFiles.slice(0, 60).map(async (srv) => {
       const r = parseBody((await rpc('tools/call', { name: 'readToolFile', arguments: { fileName: `servers/${srv}.pyi` } }, timeoutMs) || {}).body);
       const body = r && r.result && r.result.content ? r.result.content.map((c) => c.text || '').join('') : '';
@@ -393,7 +395,7 @@ async function discover(timeoutMs) {
       for (const m of body.matchAll(/^def ([A-Za-z0-9_]{1,40})\(/gm)) {
         if (tools.length < 200) tools.push(m[1]);
       }
-      codeServers[srv] = tools;
+      codeServers[srv] = tools.length ? tools : (Array.isArray(prev[srv]) ? prev[srv] : []);
     }));
     const findCode = (re) => {
       for (const srv of Object.keys(codeServers).sort()) {

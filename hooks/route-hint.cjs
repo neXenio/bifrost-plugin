@@ -15,19 +15,22 @@ const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 
-// server -> what identifies a direct call to it in a Bash command or a fetched URL.
+// server -> what identifies a direct call to it. Bash segments must also run a network
+// client (curl, wget, httpie, glab, acli, jira) so a path or a grep that merely
+// mentions the name does not count.
 const ROUTES = [
-  ['gitlab', /\bgitlab\.com\b|^\s*glab\s/],
-  ['jira', /\batlassian\.net\b|^\s*(acli|jira)\s/],
-  ['grafana', /\bgrafana\.(net|com)\b|\bgrafana\.[a-z0-9.-]+\/api\//],
+  ['gitlab', /\bgitlab\.com\b/, /^glab\s/],
+  ['jira', /\batlassian\.net\b/, /^(acli|jira)\s/],
+  ['grafana', /\bgrafana\.(net|com)\b|https?:\/\/[^\s/]*grafana[^\s/]*\/api\//],
   ['hubspot', /\b(api\.hubapi\.com|app\.hubspot\.com|api\.hubspot\.com)\b/],
   ['sentry', /\bsentry\.io\b/],
-  ['glitchtip', /\bglitchtip\b/],
-  ['metabase', /\bmetabase\b/],
-  ['mattermost', /\bmattermost\b.*\/api\/v4\//],
+  ['glitchtip', /https?:\/\/[^\s/]*glitchtip/],
+  ['metabase', /https?:\/\/[^\s/]*metabase/],
+  ['mattermost', /https?:\/\/[^\s]*\/api\/v4\//],
   ['webflow', /\bapi\.webflow\.com\b/],
   ['clarity', /\bclarity\.ms\b/],
 ];
+const NET_CLIENT_RE = /^(sudo\s+)?(curl|wget|http|https|xh)\s/;
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -39,22 +42,27 @@ function readStdin() {
   });
 }
 
-// The text this call would reach out with. Plain git (clone, push, fetch) talks to
-// GitLab too, but that is not something an MCP tool replaces.
+// What this call would reach out to: a fetched URL, or the Bash command split into
+// segments on && ; | so `cd repo && glab mr list` counts and `git clone` does not.
 function target(event) {
   const input = event.tool_input || {};
-  if (event.tool_name === 'WebFetch') return String(input.url || '');
+  if (event.tool_name === 'WebFetch') return { url: String(input.url || ''), segments: [] };
   if (event.tool_name === 'Bash') {
-    const cmd = String(input.command || '');
-    return /^\s*git\s/.test(cmd) ? '' : cmd;
+    const segments = String(input.command || '').split(/&&|\|\||[;|\n]/).map((x) => x.trim()).filter(Boolean);
+    return { url: '', segments };
   }
-  return '';
+  return { url: '', segments: [] };
 }
 
-function matchServer(text, roster) {
-  if (!text || !roster) return null;
-  for (const [server, re] of ROUTES) {
-    if (Array.isArray(roster[server]) && roster[server].length && re.test(text)) return server;
+function matchServer(t, roster) {
+  if (!t || !roster) return null;
+  for (const [server, hostRe, cliRe] of ROUTES) {
+    if (!(Array.isArray(roster[server]) && roster[server].length)) continue;
+    if (t.url && hostRe.test(t.url)) return server;
+    for (const seg of t.segments || []) {
+      if (cliRe && cliRe.test(seg)) return server;
+      if (NET_CLIENT_RE.test(seg) && hostRe.test(seg)) return server;
+    }
   }
   return null;
 }
@@ -70,17 +78,17 @@ function hint(server, tools) {
   ].join(' ');
 }
 
-// One marker per server per session, next to the other per-session markers.
+// One marker per server per session, next to the other per-session markers. Created
+// exclusively; if it cannot be written the hint stays quiet rather than repeating.
 function firstTime(sessionId, server) {
-  if (!sessionId) return true;
+  if (!sessionId) return false;
   const safe = String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
   const file = path.join(os.homedir(), '.cache', 'bifrost-plugin', 'reflect', `${safe}.route-${server}`);
   try {
-    if (fs.existsSync(file)) return false;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '', 'utf8');
-  } catch (_) { /* best-effort */ }
-  return true;
+    fs.writeFileSync(file, '', { flag: 'wx' });
+    return true;
+  } catch (_) { return false; }
 }
 
 async function main() {

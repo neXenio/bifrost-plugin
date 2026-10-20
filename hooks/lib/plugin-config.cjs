@@ -45,21 +45,31 @@ const SUPPORTED_SCHEMA_VERSION = 1;
 
 // ---- env ----------------------------------------------------------------
 
-// Key and gateway come from gateway.cjs, so plugin options, .mcp.json and the
-// auto-login cache all work, not only shell env. Keyapp base: BIFROST_KEYAPP_URL, else
-// the `keyapp_url` option, else the gateway's origin (the key already goes there).
+// Keyapp base: BIFROST_KEYAPP_URL, else the `keyapp_url` option; the key then is
+// BIFROST_VK or whatever gateway.cjs resolves. Without either, the gateway's origin,
+// paired with the key gateway.cjs issued for that same gateway, so a key never goes to
+// a host it was not issued for. Cleartext is refused except on loopback.
+function safeBase(u) {
+  try {
+    const x = new URL(u);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(x.hostname);
+    return x.protocol === 'https:' || (x.protocol === 'http:' && loopback) ? u.replace(/\/+$/, '') : '';
+  } catch (_) { return ''; }
+}
+
 function env() {
-  const g = gw.env();
-  const vk = (process.env.BIFROST_VK || '').trim() || g.vk;
-  let keyappUrl = (process.env.BIFROST_KEYAPP_URL || gw.pluginOption('keyapp_url') || '').trim();
-  if (!keyappUrl && g.url && g.vk) {
-    try { keyappUrl = new URL(g.url).origin; } catch (_) { keyappUrl = ''; }
+  const enabled = process.env.BIFROST_PLUGIN_CONFIG !== '0';
+  const explicit = (process.env.BIFROST_KEYAPP_URL || gw.pluginOption('keyapp_url') || '').trim();
+  if (explicit) {
+    const vk = (process.env.BIFROST_VK || '').trim() || gw.env().vk;
+    return { keyappUrl: safeBase(explicit), vk, enabled };
   }
-  return {
-    keyappUrl: keyappUrl.replace(/\/+$/, ''),
-    vk,
-    enabled: process.env.BIFROST_PLUGIN_CONFIG !== '0',
-  };
+  const g = gw.env();
+  let origin = '';
+  if (g.url && g.vk) {
+    try { origin = new URL(g.url).origin; } catch (_) {}
+  }
+  return { keyappUrl: safeBase(origin), vk: origin ? g.vk : '', enabled };
 }
 
 function ttlMs() {
