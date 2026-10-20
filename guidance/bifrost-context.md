@@ -1,5 +1,18 @@
 # Bifrost gateway — session context
 
+> **⚡ BIFROST AI GATEWAY CONNECTED**
+> You are connected to the company's central AI gateway and tool bus.
+>
+> - **Skills Library (`luca-skills`):** Over 1,000 executable playbooks & standards — search before building!
+> - **Shared Team Memory (`lucamemory`):** Persistent institutional knowledge, prior decisions, and root causes.
+> - **Enterprise MCP Servers:** Pre-authenticated access to GitLab, Jira, Sentry, Metabase, Grafana, Exa, Perplexity, etc.
+>
+> **Core reflex for this session:**
+> 1. **Skills first:** Run `skill_search(query="<task>")` ➔ `get_skill(name=...)` before non-trivial work.
+> 2. **Memory check:** Query `memory_search(query="<topic>")` before designing or debugging; store durable learnings with `memory_store(...)`.
+> 3. **Code-mode tools:** Access backend tools via `executeToolCode(code='result = <server>.<tool>(...)')` (list with `listToolFiles()`).
+> 4. **No direct CLI bypass:** Do not run raw `curl`, `glab`, or custom API scripts for services Bifrost already hosts.
+
 You are connected to a **Bifrost MCP gateway**: a unified MCP proxy that routes to
 the tools, skill library, and memory your gateway exposes.
 

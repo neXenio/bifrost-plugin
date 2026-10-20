@@ -23,12 +23,17 @@ const ROUTES = [
   ['jira', /\batlassian\.net\b/, /^(acli|jira)\s/],
   ['grafana', /\bgrafana\.(net|com)\b|https?:\/\/[^\s/]*grafana[^\s/]*\/api\//],
   ['hubspot', /\b(api\.hubapi\.com|app\.hubspot\.com|api\.hubspot\.com)\b/],
-  ['sentry', /\bsentry\.io\b/],
+  ['sentry', /\bsentry\.io\b/, /^sentry-cli\s/],
   ['glitchtip', /https?:\/\/[^\s/]*glitchtip/],
   ['metabase', /https?:\/\/[^\s/]*metabase/],
   ['mattermost', /https?:\/\/[^\s]*\/api\/v4\//],
   ['webflow', /\bapi\.webflow\.com\b/],
   ['clarity', /\bclarity\.ms\b/],
+  ['firecrawl', /\b(api\.firecrawl\.dev|firecrawl\.dev)\b/, /^firecrawl\s/],
+  ['exa', /\b(api\.exa\.ai|mcp\.exa\.ai|exa\.ai)\b/],
+  ['perplexity', /\b(api\.perplexity\.ai|perplexity\.ai)\b/],
+  ['tavily', /\b(api\.tavily\.com|tavily\.com)\b/],
+  ['context7', /\b(context7\.ai|api\.context7\.com)\b/],
 ];
 const NET_CLIENT_RE = /^(sudo\s+)?(curl|wget|http|https|xh)\s/;
 
@@ -64,6 +69,17 @@ function matchServer(t, roster) {
       if (NET_CLIENT_RE.test(seg) && hostRe.test(seg)) return server;
     }
   }
+
+  // Intercept generic web search engines when the gateway roster holds an AI search provider
+  const SEARCH_ENGINE_RE = /\b(google\.[a-z.]+\/search|duckduckgo\.com|bing\.com\/search)\b/i;
+  const isSearch = (t.url && SEARCH_ENGINE_RE.test(t.url))
+    || (t.segments || []).some((seg) => NET_CLIENT_RE.test(seg) && SEARCH_ENGINE_RE.test(seg));
+  if (isSearch) {
+    for (const candidate of ['exa', 'perplexity', 'tavily']) {
+      if (Array.isArray(roster[candidate]) && roster[candidate].length) return candidate;
+    }
+  }
+
   return null;
 }
 
