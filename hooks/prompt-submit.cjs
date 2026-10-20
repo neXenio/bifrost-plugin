@@ -167,7 +167,7 @@ function safeFact(t) {
     .replace(/\s+/g, ' ')
     .replace(/<\/?[A-Za-z][^>]*>?/g, '[tag]')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[`*_#>]/g, '')
+    .replace(/[`*#>]/g, '')
     .trim();
 }
 
