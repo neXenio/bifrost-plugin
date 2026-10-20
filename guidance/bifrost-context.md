@@ -42,7 +42,7 @@ modes, and **the same gateway usually mixes both**:
    ```
 
    Discover what code-mode offers with `listToolFiles()`, then
-   `readToolFile(fileName="servers/<server>/<tool>.pyi")` to confirm parameters, and
+   `readToolFile(fileName="servers/<server>.pyi")` (the path `listToolFiles()` prints) to confirm parameters, and
    `getToolDocs(server=..., tool=...)` for full docs. Note the parameter is
    `fileName`, not `path`.
 

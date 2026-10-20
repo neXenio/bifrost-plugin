@@ -26,31 +26,32 @@ Exact schemas, as the gateway advertises them:
 The parameter is `fileName`, **not** `path` or `file`. Passing `path` fails with
 `fileName parameter is required and must be a string`.
 
-`fileName` is the full catalog path: `servers/<server>/<tool>.pyi`.
+`fileName` is the catalog path exactly as `listToolFiles()` prints it. On our gateway
+that is one file per server, `servers/<server>.pyi`; gateways with tool-level binding
+use `servers/<server>/<tool>.pyi` instead.
 
 ## Workflow
 
-**1. Discover.** `listToolFiles()` returns the catalog, grouped by server:
+**1. Discover.** `listToolFiles()` returns the catalog, one file per server:
 
 ```
 servers/
-  jira/
-    search_jira_tickets.pyi
-    create_jira_ticket.pyi
-    ...
+  gitlab.pyi
+  jira.pyi
+  ...
 ```
 
 **2. Confirm the signature.** Never call a tool whose parameters you have not read.
 
 ```
-readToolFile(fileName="servers/jira/search_jira_tickets.pyi")
+readToolFile(fileName="servers/jira.pyi")
 ```
 
-returns a typed stub with the exact callable name and an inline description:
+returns typed stubs for every tool on that server, with the exact callable names and
+inline descriptions:
 
 ```python
-# Total lines: 10 (this is the complete file, no need to paginate)
-# jira.search_jira_tickets tool
+# jira server tools
 # Usage: jira.tool_name(param=value)
 def search_jira_tickets(query: str, max_results: float = None, service: str = None, status: str = None) -> dict:  # Search JIRA before filing a new ticket to avoid duplicates.
 ```

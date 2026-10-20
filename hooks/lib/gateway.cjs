@@ -362,6 +362,7 @@ async function discover(timeoutMs) {
     // Lines look like:  "  <server>/" then "    <tool>.pyi"
     let current = null;
     const codeServers = {}; // server -> Set(tool)
+    const serverFiles = [];
     for (const line of text.split(/\r?\n/)) {
       // Any line that looks like a server header ends the previous server, even if its
       // name fails the charset. Leaving `current` in place would silently donate the
@@ -372,6 +373,10 @@ async function discover(timeoutMs) {
         if (current) codeServers[current] = codeServers[current] || [];
         continue;
       }
+      // Server-level binding (Bifrost v2 default here): one `  <server>.pyi` per server,
+      // tools are the `def` lines inside it, read below.
+      const fm = line.match(/^\s{2}([A-Za-z0-9_-]{1,40})\.pyi\s*$/);
+      if (fm) { current = null; serverFiles.push(fm[1]); continue; }
       const tm = line.match(/^\s{3,}([A-Za-z0-9_]{1,40})\.pyi\s*$/);
       // Cap tools per server. The charset already blocks newlines and markdown, but
       // nothing bounded LENGTH or COUNT, so a hostile catalog could balloon the cache
@@ -380,6 +385,16 @@ async function discover(timeoutMs) {
       // charset: a 200-character underscore_separated_name reads as a sentence.
       if (tm && current && codeServers[current].length < 200) codeServers[current].push(tm[1]);
     }
+    // Same caps as above. Parallel, so the whole catalog costs about one round trip.
+    await Promise.all(serverFiles.slice(0, 60).map(async (srv) => {
+      const r = parseBody((await rpc('tools/call', { name: 'readToolFile', arguments: { fileName: `servers/${srv}.pyi` } }, timeoutMs) || {}).body);
+      const body = r && r.result && r.result.content ? r.result.content.map((c) => c.text || '').join('') : '';
+      const tools = [];
+      for (const m of body.matchAll(/^def ([A-Za-z0-9_]{1,40})\(/gm)) {
+        if (tools.length < 200) tools.push(m[1]);
+      }
+      codeServers[srv] = tools;
+    }));
     const findCode = (re) => {
       for (const srv of Object.keys(codeServers).sort()) {
         const tool = codeServers[srv].find((t) => re.test(t));
