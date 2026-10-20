@@ -71,11 +71,18 @@ test('.mcp.json keeps the exact bifrost server shape (name, transport, userConfi
 // It is additive — the two original events keep their existing contract — but Stop is
 // the one event that can hang a session (exit code 2 blocks the turn from ending), so
 // the properties that make it safe are pinned here rather than left to review.
-test('hooks.json registers the five events this plugin uses', () => {
+test('hooks.json registers the six events this plugin uses', () => {
   const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
   assert.deepStrictEqual(Object.keys(cfg.hooks).sort(), [
-    'PostToolUse', 'PostToolUseFailure', 'SessionStart', 'Stop', 'UserPromptSubmit',
+    'PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit',
   ]);
+});
+
+test('the route hint only watches Bash and WebFetch and never runs async', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
+  const group = cfg.hooks.PreToolUse[0];
+  assert.equal(group.matcher, 'Bash|WebFetch');
+  assert.ok(!group.hooks[0].async);
 });
 
 test('the usage counter is scoped to gateway tools only, and never blocks one', () => {
