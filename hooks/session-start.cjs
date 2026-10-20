@@ -342,13 +342,12 @@ function emitRoster(disc) {
     '',
   ];
 
-  // Tool of the day: rotates deterministically across available code-mode tools based on calendar date.
-  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
-  const [totdServer, totdTools] = all[dayOfYear % all.length];
-  const totdTool = totdTools[dayOfYear % totdTools.length];
-  if (totdServer && totdTool) {
+  // Random featured tool advertised per session across available code-mode servers
+  const [pickServer, pickTools] = all[Math.floor(Math.random() * all.length)];
+  const pickTool = pickTools[Math.floor(Math.random() * pickTools.length)];
+  if (pickServer && pickTool) {
     lines.push(
-      `> 💡 **Tool of the Day:** \`${totdServer}.${totdTool}\` — signature in \`servers/${totdServer}.pyi\`, call with \`executeToolCode(code='result = ${totdServer}.${totdTool}(...)')\`.`,
+      `> 💡 **Featured tool this session:** \`${pickServer}.${pickTool}\` — signature in \`servers/${pickServer}.pyi\`, call with \`executeToolCode(code='result = ${pickServer}.${pickTool}(...)')\`.`,
       ''
     );
   }
