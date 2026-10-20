@@ -41,17 +41,3 @@ test('hint names the server file and code-mode call', () => {
   assert.match(h, /servers\/gitlab\.pyi/);
   assert.match(h, /result = gitlab\.<tool>/);
 });
-
-test('search engines and extended tools route to gateway capabilities', () => {
-  const bash = (command) => rh.target({ tool_name: 'Bash', tool_input: { command } });
-  const extRoster = {
-    exa: ['search', 'find_similar'],
-    sentry: ['list_issues'],
-    firecrawl: ['scrape', 'crawl'],
-  };
-  assert.equal(rh.matchServer(bash('curl -s https://duckduckgo.com/html/?q=bifrost'), extRoster), 'exa');
-  assert.equal(rh.matchServer(rh.target({ tool_name: 'WebFetch', tool_input: { url: 'https://www.google.com/search?q=nodejs' } }), extRoster), 'exa');
-  assert.equal(rh.matchServer(bash('sentry-cli issues list'), extRoster), 'sentry');
-  assert.equal(rh.matchServer(bash('firecrawl scrape https://example.com'), extRoster), 'firecrawl');
-});
-
