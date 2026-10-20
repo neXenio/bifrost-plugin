@@ -342,6 +342,17 @@ function emitRoster(disc) {
     '',
   ];
 
+  // Tool of the day: rotates deterministically across available code-mode tools based on calendar date.
+  const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const [totdServer, totdTools] = all[dayOfYear % all.length];
+  const totdTool = totdTools[dayOfYear % totdTools.length];
+  if (totdServer && totdTool) {
+    lines.push(
+      `> 💡 **Tool of the Day:** \`${totdServer}.${totdTool}\` — signature in \`servers/${totdServer}.pyi\`, call with \`executeToolCode(code='result = ${totdServer}.${totdTool}(...)')\`.`,
+      ''
+    );
+  }
+
   // Sample tool names, not just counts: `gitlab` and `sentry` explain themselves,
   // `spinach` and `clarity` do not, and the tool names are already in the cache.
   for (const [srv, tools] of entries) {

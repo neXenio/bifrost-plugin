@@ -1,11 +1,7 @@
 # Bifrost gateway — session context
 
 > **⚡ BIFROST AI GATEWAY CONNECTED**
-> You are connected to the company's central AI gateway and tool bus.
->
-> - **Skills Library (`luca-skills`):** Over 1,000 executable playbooks & standards — search before building!
-> - **Shared Team Memory (`lucamemory`):** Persistent institutional knowledge, prior decisions, and root causes.
-> - **Enterprise MCP Servers:** Pre-authenticated access to GitLab, Jira, Sentry, Metabase, Grafana, Exa, Perplexity, etc.
+> Unified company AI gateway, tool bus, and shared memory.
 >
 > **Core reflex for this session:**
 > 1. **Skills first:** Run `skill_search(query="<task>")` ➔ `get_skill(name=...)` before non-trivial work.
