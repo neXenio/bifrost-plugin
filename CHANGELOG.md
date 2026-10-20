@@ -2,6 +2,31 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.10.0] — 2026-10-20
+
+**Hooks now drive the gateway.** Before this release the server-side hook config never
+reached anyone, the tool roster had gone empty on Bifrost v2, and the per-prompt hint
+named no actual skill.
+
+- Signed plugin-config is fetched with the key from plugin options or auto-login, and
+  from the gateway's own origin when no keyapp URL is set. It used to need
+  `BIFROST_KEYAPP_URL` and `BIFROST_VK` in the shell, which no 1.9 install had, so no
+  plugin had fetched it since July.
+- Discovery reads Bifrost v2's server-level catalog (`servers/<server>.pyi`). The
+  session-start tool roster renders again (19 servers, 278 tools on our gateway).
+- Each task-shaped prompt runs `skill_search` and `memory_search` with the prompt itself
+  and shows the top skills and up to 3 facts above a similarity floor. One 1.5 s
+  deadline for both, falling back to the old nudge. Background task notifications are
+  no longer treated as prompts.
+- New PreToolUse hook `route-hint`: when Bash or WebFetch goes straight to GitLab,
+  Jira, HubSpot, Grafana, Sentry and other services the gateway serves, the model is
+  told once per session which gateway server to use instead. Hint only, never blocks.
+- The end-of-session check-in can send verified findings to `memory_store`
+  (keyapp `session-reflect.memoryStore`, off by default; uncertain ones stay local).
+- All new behaviour has keyapp knobs (`prompt-submit`, `route-hint`,
+  `session-reflect`) and env overrides, see the README table.
+- `package.json` carries the release version again (1.9.1 missed it).
+
 ## [1.9.1] — 2026-10-20
 
 - `bifrost-code-mode` skill matches Bifrost v2.3.1: failed calls come back as a value
