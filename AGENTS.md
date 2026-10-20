@@ -6,9 +6,7 @@ The `bifrost` MCP gateway may expose a shared skill library and a set of MCP
 servers (docs, search, issue tracker, memory, etc.) — whatever your gateway is
 configured to route to.
 
-**BEFORE starting any non-trivial task** — implementing a feature, writing a
-migration, debugging, reviewing a PR, deploying, setting up infra, writing tests,
-or drafting docs — you MUST call the gateway's skill-search tool, typically
+**BEFORE starting any non-trivial task** — researching prospects, qualifying leads, planning campaigns, preparing client proposals, implementing features, debugging, reviewing PRs, or drafting docs — you MUST call the gateway's skill-search tool, typically
 **`mcp__plugin_<plugin>_bifrost__<skills-server>-skill_search`** (the plugin server;
 `mcp__bifrost__…` only for a hand-added server, `mcp__claude_ai_<Name>__…` via the claude.ai
 connector; the skill server is named `skills` by default; set `BIFROST_SKILLS_SERVER` if your gateway names it
@@ -24,12 +22,13 @@ reads / grep, clarifying questions, or tasks the user has scoped to one file.
 ### Gateway routing (use bifrost, don't ask the user / don't guess)
 Route capability requests through whichever MCP servers your gateway exposes, for
 example:
-- Issue / ticket status → your issue-tracker server
-- Production errors / stacktraces → your error-tracking server
-- Analytics / database queries → your analytics server
+- CRM / customer records / deal pipeline → your CRM server (e.g. HubSpot)
+- Issue / ticket status → your issue-tracker server (e.g. Jira, GitLab)
+- Production errors / stacktraces → your error-tracking server (e.g. Sentry, GlitchTip)
+- Analytics / database queries → your analytics server (e.g. Metabase, Grafana)
+- Web search, enrichment & scraping → your web tooling (e.g. Exa, Tavily, Firecrawl)
 - Up-to-date library/API docs → your docs server (NOT training memory)
-- Web search → your web-search server
-- Past decisions, people, project facts → your memory server (query directly
+- Past decisions, customer notes, people, project facts → your memory server (query directly
   via the gateway's memory MCP tool — see Memory section below)
 
 ---
@@ -42,11 +41,11 @@ the agent.
 
 **Before non-trivial tasks:** call the gateway's memory search tool (typically
 `mcp__plugin_<plugin>_bifrost__<memory-server>-search`, or the `mcp__bifrost__…` / `mcp__claude_ai_<Name>__…` form for a hand-added server or the connector) with a short query to recall relevant
-past decisions, project facts, or context (e.g. `k=5`).
+past decisions, customer context, project facts, or known caveats (e.g. `k=5`).
 
 **After completing significant work:** save durable facts or decisions with the
 gateway's memory store tool (typically `mcp__plugin_<plugin>_bifrost__<memory-server>-store`, same prefix rules).
-Include: architectural decisions made, root causes of bugs found, project
+Include: customer notes and deal context, architectural decisions made, root causes of bugs found, project
 conventions learned, gotchas discovered. Exclude: transient details, secrets,
 per-file noise. Most stretches of work produce nothing durable, and storing
 nothing is the right outcome then — a corpus padded with restatements of the

@@ -538,14 +538,14 @@ function emitMemory(cache, cfg, use, refreshing) {
       ? (t) => `result = ${m.server}.${t}(...)  (via executeToolCode)`
       : (t) => `${gw.toolPrefix()}${gw.flatToolName(m, t)}`;
     lines.push(
-      'This is team memory: decisions, root causes, conventions and gotchas recorded by',
-      'everyone\'s agents. Recall quality depends on how specific your query is, so search',
-      '**once you understand the task**, not before — a query built from the real problem',
-      'beats one built from the directory name.',
+      'This is company memory: client/lead facts, meeting context, decisions, operational knowledge,',
+      'conventions and root causes recorded across sales, ops, product and engineering agents. Recall',
+      'quality depends on how specific your query is, so search **once you understand the task**, not',
+      'before — a query built from the real problem beats one built from the directory name.',
       '',
       `- **Recall**: \`${call('memory_search')}\` with \`query="<the specific thing>"\`, \`limit=6\`.`,
-      `- **Store**: \`${call('memory_store')}\` after significant work — decisions made, root`,
-      '  causes found, conventions and gotchas learned. This is how the next person\'s agent',
+      `- **Store**: \`${call('memory_store')}\` after significant work — customer insights, decisions`,
+      '  made, root causes found, conventions and gotchas learned. This is how the next person\'s agent',
       '  (and yours, next week) gets it for free. Skip transient detail, secrets, per-file noise.',
       '',
       'Search before non-trivial work; store after it. Reading without ever writing is',
