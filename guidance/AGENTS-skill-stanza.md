@@ -30,3 +30,25 @@ example:
 - Past decisions, people, project facts → your memory server (query directly
   via the gateway's memory MCP tool before non-trivial tasks; save decisions
   after completing significant work)
+## Outgoing company communications — final quality pass
+
+Before presenting a final external draft or preparing outgoing company emails,
+customer responses, proposals, website copy or social posts, load
+`anti-ai-slop-docs-marketing` through the advertised skill catalog and apply a
+final quality pass. Use the actual advertised search/navigation and retrieval
+schemas; do not assume a gateway host, server prefix or local skill path.
+A relevant skill already loaded in this session need not be fetched again.
+This requirement also covers short outgoing copy that otherwise qualifies for
+skipping general skill discovery.
+
+Preserve facts, names, numbers, links, quotations, legal disclosures and the
+intended voice. Improve clarity and remove unsupported or repetitive wording
+without inventing claims or turning uncertain statements into certainties. Respect review-only
+requests and exact approved copy: report concerns instead of silently rewriting
+text that must remain exact. A quality pass does not authorize sending or
+publishing; existing approval and destination requirements still apply.
+
+If the skill is unavailable, say so briefly and perform only the checks you can
+support; never claim the skill was loaded or applied. This default does not
+activate watermark or metadata removal, backend setup, uploads, sending or
+publishing. Do not expand it to ordinary internal chat or unrelated code work.

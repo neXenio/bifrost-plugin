@@ -156,3 +156,11 @@ These are **not** solved by the plugin and must be in place first:
 - Distribution to 300: **gated on gateway prerequisites 1–5 above.** Ship to the
   pilot first; do not fan out to 300 until the memory/skill server is proven under
   concurrent load.
+
+## Updating outgoing-copy guidance (1.10.2)
+
+The outgoing company communications requirement ships in the plugin's SessionStart guidance and the base AGENTS skill stanza. Publish or synchronize version 1.10.2 through the same marketplace or private organization mirror that clients already use; updating the public repository alone does not update a private mirror or prove that installed clients have refreshed.
+
+After the client updates its installed plugin, start a new session on a hook-enabled surface and verify that the context contains “Outgoing company communications — final quality pass”. Already-running sessions retain their existing context. Desktop Chat and claude.ai web do not run SessionStart hooks; use their managed instructions or the supplied AGENTS stanza where supported instead of claiming hook coverage there. Existing manually copied AGENTS stanzas also need their managed block refreshed; changing this template does not rewrite those files remotely.
+
+The gateway's advertised skill catalog must expose `anti-ai-slop-docs-marketing`. Missing availability is reported by the workflow; plugin version alone does not prove the skill can be retrieved. No new gateway URL, credentials, service deployment or automatic send/publish action is introduced.

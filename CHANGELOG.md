@@ -2,6 +2,12 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.10.2] — 2026-10-23
+
+- Require the advertised `anti-ai-slop-docs-marketing` workflow for final outgoing company copy, including short external drafts.
+- Preserve exact approved copy, factual and legal details, and review-only boundaries. Missing skills are reported honestly; the quality pass does not authorize uploads, sending, publishing or metadata removal.
+- Exercise the real SessionStart hook output in a targeted regression test.
+
 ## [1.10.1] — 2026-10-21
 
 - **Cross-functional workflows & UX overhaul**:
