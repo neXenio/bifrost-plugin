@@ -48,7 +48,7 @@ skipping general skill discovery.
 
 Preserve facts, names, numbers, links, quotations, legal disclosures and the
 intended voice. Improve clarity and remove unsupported or repetitive wording
-without inventing claims or strengthening uncertainty. Respect review-only
+without inventing claims or turning uncertain statements into certainties. Respect review-only
 requests and exact approved copy: report concerns instead of silently rewriting
 text that must remain exact. A quality pass does not authorize sending or
 publishing; existing approval and destination requirements still apply.
