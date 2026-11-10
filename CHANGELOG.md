@@ -2,6 +2,13 @@
 
 All notable changes to bifrost-plugin are documented here.
 
+## [1.10.3] — 2026-11-11
+
+- Validate signed policy manifests even when the bundle has not changed.
+- Handle MCP session initialization, response IDs and streamed SSE responses with bounded response sizes and deadlines.
+- Scope policy, discovery and injected-context caches to the gateway and credential. Ignore legacy private caches while preserving public signing-key pin continuity.
+- Prevent late refresh and recall results from crossing identity boundaries.
+
 ## [1.10.2] — 2026-10-23
 
 - Require the advertised `anti-ai-slop-docs-marketing` workflow for final outgoing company copy, including short external drafts.
