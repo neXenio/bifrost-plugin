@@ -87,7 +87,8 @@ function startStubGateway(toolNames, catalog, files = {}) {
     req.on('end', () => {
       let msg = {};
       try { msg = JSON.parse(body); } catch (_) {}
-      let result = {};
+      if (msg.method === 'notifications/initialized') { res.writeHead(202); res.end(); return; }
+      let result = { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fixture', version: '1' } };
       if (msg.method === 'tools/list') {
         result = { tools: toolNames.map((name) => ({ name })) };
       } else if (msg.method === 'tools/call') {

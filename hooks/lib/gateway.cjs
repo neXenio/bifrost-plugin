@@ -210,47 +210,151 @@ function env() {
   return { url: '', vk: '' };
 }
 
+const PROTOCOL_VERSION = '2025-06-18';
+// Hooks are short-lived best-effort clients, not bulk exporters. Bound each response
+// (including discarded SSE progress) to 4 MiB so a gateway cannot grow their memory
+// without limit. Oversized catalogs fail closed and retain the existing cache fallback.
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+let transportSession;
+let requestId = 0;
+
+// Session state belongs to one endpoint/key pair and is never persisted to disk.
+async function rpc(method, params, timeoutMs) {
+  try {
+    const credential = env();
+    if (!credential.url || !credential.vk) return null;
+    const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
+    const deadline = Date.now() + budget;
+    let timer;
+    const operation = async () => {
+      if (method === 'initialize') return sendRpc(method, params, deadline, credential);
+      const session = await ensureSession(deadline, credential);
+      if (!session || Date.now() >= deadline) return null;
+      const response = await sendRpc(method, params, deadline, credential, session);
+      // Do not replay tools/call: it may have side effects. A later call can reconnect.
+      if (response && (response.status === 404 || response.status === 401)) {
+        if (transportSession === session) transportSession = undefined;
+      }
+      return response;
+    };
+    try {
+      return await Promise.race([
+        operation(),
+        new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  } catch (_) { return null; }
+}
+
+async function ensureSession(deadline, credential) {
+  let session = transportSession;
+  if (!session || session.url !== credential.url || session.vk !== credential.vk) {
+    session = { ...credential };
+    transportSession = session;
+    session.ready = (async () => {
+      const response = await sendRpc('initialize', {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'bifrost-plugin-hook', version: '0' },
+      }, deadline, credential);
+      const result = response && response.status === 200 && parseBody(response.body)?.result;
+      if (!result || result.protocolVersion !== PROTOCOL_VERSION ||
+          !result.capabilities || typeof result.capabilities !== 'object' || Array.isArray(result.capabilities) ||
+          !result.serverInfo || typeof result.serverInfo.name !== 'string' || typeof result.serverInfo.version !== 'string') return null;
+      session.protocolVersion = result.protocolVersion;
+      const id = response.headers['mcp-session-id'];
+      if (id !== undefined && (typeof id !== 'string' || !/^[\x21-\x7E]+$/.test(id))) return null;
+      session.id = id;
+      const initialized = await sendRpc('notifications/initialized', undefined, deadline, credential, session, true);
+      return initialized && initialized.status === 202 ? session : null;
+    })().catch(() => null);
+  }
+  const ready = await session.ready;
+  if (!ready && transportSession === session) transportSession = undefined;
+  return ready;
+}
+
 // One JSON-RPC round-trip over Streamable HTTP. Resolves {status, body} or null.
-function rpc(method, params, timeoutMs) {
-  const { url, vk } = env();
-  if (!url || !vk) return Promise.resolve(null);
+function sendRpc(method, params, deadline, credential, session, notification = false) {
+  const { url, vk } = credential;
   return new Promise((resolve) => {
-    let u;
-    try { u = new URL(url); } catch (_) { return resolve(null); }
-    // Never send the x-bf-vk key in cleartext: plain http is only allowed to
-    // loopback (local dev gateways). Anything else must be https.
-    // BIFROST_ALLOW_HTTP=1 is a legacy escape hatch for pre-1.2.0 deployments
-    // whose gateway lives on a private network behind plain http — set it
-    // deliberately, knowing the key crosses the wire unencrypted.
-    const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
-    const allowHttp = isLoopback || process.env.BIFROST_ALLOW_HTTP === '1';
-    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && allowHttp)) return resolve(null);
-    const payload = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
-    const lib = u.protocol === 'http:' ? http : https;
-    const req = lib.request(
-      {
+    let req;
+    let timer;
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    try {
+      const u = new URL(url);
+      // Never send the x-bf-vk key in cleartext: plain http is only allowed to
+      // loopback (local dev gateways). Anything else must be https.
+      // BIFROST_ALLOW_HTTP=1 is a legacy escape hatch for pre-1.2.0 deployments
+      // whose gateway lives on a private network behind plain http — set it
+      // deliberately, knowing the key crosses the wire unencrypted.
+      const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+      const allowHttp = isLoopback || process.env.BIFROST_ALLOW_HTTP === '1';
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && allowHttp)) return finish(null);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return finish(null);
+      const id = notification ? undefined : ++requestId;
+      const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
+      const lib = u.protocol === 'http:' ? http : https;
+      const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'x-bf-vk': vk,
+        'Content-Length': Buffer.byteLength(payload),
+      };
+      if (session) {
+        headers['MCP-Protocol-Version'] = session.protocolVersion;
+        if (session.id) headers['Mcp-Session-Id'] = session.id;
+      }
+      req = lib.request({
         hostname: u.hostname,
         port: u.port || (u.protocol === 'http:' ? 80 : 443),
         path: u.pathname + u.search,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          'x-bf-vk': vk,
-          'Content-Length': Buffer.byteLength(payload),
-        },
-      },
-      (resp) => {
+        headers,
+      }, resp => {
         if (resp.statusCode === 401) forgetCachedKey(url, vk);
-        let d = '';
-        resp.on('data', (c) => (d += c));
-        resp.on('end', () => resolve({ status: resp.statusCode, body: d }));
-      }
-    );
-    req.on('error', () => resolve(null));
-    req.setTimeout(timeoutMs || 3000, () => { req.destroy(); resolve(null); });
-    req.write(payload);
-    req.end();
+        let body = '';
+        let bytes = 0;
+        const readEvent = sseReader(id);
+        const sse = /^text\/event-stream(?:;|$)/i.test(resp.headers['content-type'] || '');
+        resp.setEncoding('utf8');
+        resp.on('error', () => finish(null));
+        resp.on('aborted', () => finish(null));
+        resp.on('data', chunk => {
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > MAX_RESPONSE_BYTES) { finish(null); resp.destroy(); return; }
+          if (sse && !notification && resp.statusCode === 200) {
+            const parsed = readEvent(chunk);
+            if (parsed) {
+              const body = JSON.stringify(parsed);
+              finish(parseBody(body, id) ? { status: resp.statusCode, body, headers: resp.headers } : null);
+              resp.destroy();
+            }
+          } else { body += chunk; }
+        });
+        resp.on('end', () => {
+          if (notification || resp.statusCode !== 200) {
+            finish({ status: resp.statusCode, body: '', headers: resp.headers });
+            return;
+          }
+          const parsed = sse ? null : parseBody(body, id);
+          finish(parsed ? { status: resp.statusCode, body: JSON.stringify(parsed), headers: resp.headers } : null);
+        });
+      });
+      req.on('error', () => finish(null));
+      timer = setTimeout(() => { finish(null); req.destroy(); }, remaining);
+      req.end(payload);
+    } catch (_) {
+      finish(null);
+      if (req) req.destroy();
+    }
   });
 }
 
@@ -267,23 +371,69 @@ function forgetCachedKey(url, vk) {
 }
 
 // Responses may be a single JSON object or an SSE stream of `data:` lines.
-function parseBody(body) {
-  if (!body) return null;
-  const dataLines = body
-    .split(/\r?\n/)
-    .filter((l) => l.startsWith('data:'))
-    .map((l) => l.slice(5).trim());
-  const raw = dataLines.length ? dataLines.join('') : body;
-  try { return JSON.parse(raw); } catch (_) { return null; }
+function parseBody(body, expectedId, includeFailure = false) {
+  try {
+    const message = JSON.parse(body);
+    if (!message || message.jsonrpc !== '2.0' ||
+        (expectedId !== undefined && message.id !== expectedId)) return null;
+    // The first matching response ends an SSE request, even on failure. Never let
+    // a later duplicate result replace an error or malformed result envelope.
+    if (includeFailure && (Object.prototype.hasOwnProperty.call(message, 'error') ||
+        Object.prototype.hasOwnProperty.call(message, 'result'))) return message;
+    if (!Object.prototype.hasOwnProperty.call(message, 'result') ||
+        Object.prototype.hasOwnProperty.call(message, 'error') ||
+        !message.result || typeof message.result !== 'object' || Array.isArray(message.result)) return null;
+    return message;
+  } catch (_) { return null; }
+}
+
+// Consume each chunk once. A blank line dispatches one event; only its data lines
+// are retained. CR, LF and CRLF may be mixed or split across network chunks.
+function sseReader(expectedId) {
+  let parts = [];
+  let data = [];
+  let skipLf = false;
+  return chunk => {
+    let start = skipLf && chunk[0] === '\n' ? 1 : 0;
+    skipLf = false;
+    const endings = /[\r\n]/g;
+    endings.lastIndex = start;
+    let ending;
+    while ((ending = endings.exec(chunk))) {
+      parts.push(chunk.slice(start, ending.index));
+      const line = parts.join('');
+      parts = [];
+      start = ending.index + 1;
+      if (ending[0] === '\r') {
+        if (chunk[start] === '\n') start++;
+        else if (start === chunk.length) skipLf = true;
+      }
+      endings.lastIndex = start;
+      if (line === '') {
+        const message = parseBody(data.join('\n'), expectedId, true);
+        data = [];
+        if (message) return message;
+      } else if (line === 'data' || line.startsWith('data:')) {
+        data.push(line.slice(5).replace(/^ /, ''));
+      }
+    }
+    if (start < chunk.length) parts.push(chunk.slice(start));
+    return null;
+  };
 }
 
 async function handshake(timeoutMs) {
-  const r = await rpc(
-    'initialize',
-    { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'bifrost-plugin-hook', version: '0' } },
-    timeoutMs
-  );
-  return !!(r && r.status === 200);
+  let timer;
+  try {
+    const credential = env();
+    if (!credential.url || !credential.vk) return false;
+    const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
+    return !!(await Promise.race([
+      ensureSession(Date.now() + budget, credential),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); }),
+    ]));
+  } catch (_) { return false; }
+  finally { clearTimeout(timer); }
 }
 
 function readCache() {
@@ -307,7 +457,8 @@ async function discover(timeoutMs) {
   if (!(await handshake(timeoutMs))) return null;
 
   const flat = parseBody((await rpc('tools/list', {}, timeoutMs) || {}).body);
-  const flatTools = (flat && flat.result && flat.result.tools) || [];
+  if (!flat || !Array.isArray(flat.result.tools)) return null;
+  const flatTools = flat.result.tools;
   const flatNames = flatTools.map((t) => t.name);
 
   // Flat names are `<server>-<tool>`, and BOTH halves may contain hyphens: servers

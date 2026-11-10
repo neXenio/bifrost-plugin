@@ -30,7 +30,8 @@ function startGateway(reply) {
     req.on('end', () => {
       let msg = {};
       try { msg = JSON.parse(body); } catch (_) {}
-      let result = {};
+      if (msg.method === 'notifications/initialized') { res.writeHead(202); res.end(); return; }
+      let result = { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fixture', version: '1' } };
       if (msg.method === 'tools/list') {
         result = { tools: [{ name: 'teamskills-skill_search' }, { name: 'team-memory-memory_search' }] };
       } else if (msg.method === 'tools/call') {
