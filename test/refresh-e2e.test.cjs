@@ -49,6 +49,8 @@ function startGateway(reply) {
   })));
 }
 
+const { injectFile, injectScope } = require('../hooks/lib/cache-scope.cjs');
+const fixtureUrl = 'http://127.0.0.1:1/mcp';
 const mk = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
 function git(cwd, ...args) {
@@ -65,26 +67,24 @@ function repo(branch, remote = 'git@gitlab.example.com:grp/my-proj.git') {
   return dir;
 }
 
-function cachePathFor(home, proj) {
-  const label = path.basename(proj).replace(/[^A-Za-z0-9_-]/g, '_');
-  const digest = crypto.createHash('sha256').update(proj).digest('hex').slice(0, 12);
-  return path.join(home, '.cache', 'bifrost-plugin', `inject-${label}-${digest}.json`);
+function cachePathFor(home, proj, url = fixtureUrl, vk = 'k') {
+  return injectFile(proj, url, vk, home);
 }
 
-function seed(file, obj) {
+function seed(file, obj, proj, url = fixtureUrl, vk = 'k') {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(obj));
+  fs.writeFileSync(file, JSON.stringify({ cacheScope: injectScope(proj, url, vk), ...obj }));
 }
 
 // Runs `node refresh.cjs <cache> ...args` and resolves with the gateway calls and cache.
 async function runRefresh({ proj, args, env = {}, reply = () => [GOOD], prev, home = mk('e2e-home-'), binDir }) {
   const gw = await startGateway(reply);
-  const file = cachePathFor(home, proj);
-  if (prev) seed(file, prev);
   const penv = {
     ...gitEnv, HOME: home, CLAUDE_PROJECT_DIR: proj, BIFROST_URL: gw.url, BIFROST_VK: 'k',
     BIFROST_PLUGIN_CONFIG: '0', BIFROST_MEMORY_PRIME: '1', BIFROST_KB_WING: '', ...env,
   };
+  const file = cachePathFor(home, proj, penv.BIFROST_URL, penv.BIFROST_VK);
+  if (prev) seed(file, prev, proj, penv.BIFROST_URL, penv.BIFROST_VK);
   if (penv.BIFROST_MEMORY_PRIME === undefined) delete penv.BIFROST_MEMORY_PRIME;
   if (binDir) penv.PATH = `${binDir}${path.delimiter}${penv.PATH}`;
   const child = spawn(process.execPath, [REFRESH, file, ...(args || ['--dir', proj])],
@@ -294,7 +294,7 @@ test('priming on: a branch switch refreshes immediately instead of waiting out t
   const proj = repo('LUCA-9-gamma');
   const home = mk('e2e-home-');
   seed(cachePathFor(home, proj), { v: 2, at: Date.now(), memory: { server: 'team-memory', mode: 'flat',
-    head: 'ref: refs/heads/LUCA-7-alpha', facts: [{ content: 'OTHER-BRANCH-FACT' }] } });
+    head: 'ref: refs/heads/LUCA-7-alpha', facts: [{ content: 'OTHER-BRANCH-FACT' }] } }, proj);
   const { r, rec } = startSession({ proj, home, env: { BIFROST_MEMORY_PRIME: '1' } });
   assert.ok(!r.stdout.includes('OTHER-BRANCH-FACT'), 'the other branch\'s facts are not rendered');
   assert.ok(await spawnedArgv(rec, 5000), 'a fresh cache with a different HEAD must still refresh');
@@ -304,7 +304,7 @@ test('priming on, same branch, fresh cache: the hourly throttle holds', async ()
   const proj = repo('LUCA-7-alpha');
   const home = mk('e2e-home-');
   seed(cachePathFor(home, proj), { v: 2, at: Date.now(), memory: { server: 'team-memory', mode: 'flat',
-    head: 'ref: refs/heads/LUCA-7-alpha', facts: [{ content: 'SAME-BRANCH-FACT' }] } });
+    head: 'ref: refs/heads/LUCA-7-alpha', facts: [{ content: 'SAME-BRANCH-FACT' }] } }, proj);
   const { r, rec } = startSession({ proj, home, env: { BIFROST_MEMORY_PRIME: '1' } });
   assert.ok(r.stdout.includes('SAME-BRANCH-FACT'));
   assert.strictEqual(await spawnedArgv(rec, 800), null);
@@ -314,7 +314,7 @@ test('priming on over a cache written with priming off refreshes immediately', a
   const proj = repo('LUCA-7-alpha');
   const home = mk('e2e-home-');
   seed(cachePathFor(home, proj), { v: 2, at: Date.now(), memory: { server: 'team-memory', mode: 'flat',
-    skipped: 'prime-off', facts: [] } });
+    skipped: 'prime-off', facts: [] } }, proj);
   const { rec } = startSession({ proj, home, env: { BIFROST_MEMORY_PRIME: '1' } });
   assert.ok(await spawnedArgv(rec, 5000));
 });
@@ -323,7 +323,7 @@ test('priming off: a fresh cache is not refreshed early on a branch switch', asy
   const proj = repo('LUCA-9-gamma');
   const home = mk('e2e-home-');
   seed(cachePathFor(home, proj), { v: 2, at: Date.now(), memory: { server: 'team-memory', mode: 'flat',
-    skipped: 'prime-off', facts: [] } });
+    skipped: 'prime-off', facts: [] } }, proj);
   const { rec } = startSession({ proj, home });
   assert.strictEqual(await spawnedArgv(rec, 800), null);
 });

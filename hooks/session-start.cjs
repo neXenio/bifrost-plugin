@@ -50,6 +50,7 @@ const pc = require('./lib/plugin-config.cjs');
 const usage = require('./usage.cjs');
 const { buildQuery, headRef } = require('./lib/project-query.cjs');
 const keyCache = require('./lib/key-cache.cjs');
+const { injectFile, injectScope } = require('./lib/cache-scope.cjs');
 const setup = require('./auto-setup.cjs');
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -133,10 +134,10 @@ function safeUrl(url) {
 // model's context. Resolve them from the same source the hooks authenticate with, and
 // never print the key itself — the model has no use for the secret, only for knowing
 // whether one is configured.
-function emitContext() {
+function emitContext(credential = gw.env()) {
   try {
     const raw = fs.readFileSync(path.join(__dirname, '..', 'guidance', 'bifrost-context.md'), 'utf8');
-    const { url, vk } = gw.env();
+    const { url, vk } = credential;
     const filled = raw
       .replace(/\$\{BIFROST_URL\}/g, safeUrl(url))
       .replace(/\$\{BIFROST_VK\}/g, vk ? '(configured)' : '(not configured)')
@@ -158,11 +159,8 @@ function projectName() {
 // meant ~/work-a/backend and ~/work-b/backend shared one cache file, so
 // whichever refreshed last won and one project's recalled facts were injected into
 // the other's session labelled "recalled for this project".
-function cacheFile() {
-  const dir = projectDir();
-  const label = (projectName() || 'default').replace(/[^A-Za-z0-9_-]/g, '_');
-  const digest = crypto.createHash('sha256').update(dir).digest('hex').slice(0, 12);
-  return path.join(os.homedir(), '.cache', 'bifrost-plugin', `inject-${label}-${digest}.json`);
+function cacheFile(credential = gw.env()) {
+  return injectFile(projectDir(), credential.url, credential.vk);
 }
 
 // Read the cache, and say how old it is rather than throwing it away at 24h.
@@ -194,10 +192,10 @@ function ageDays(cache) {
   return Math.max(1, Math.floor(ms / (24 * 60 * 60 * 1000)));
 }
 
-function readCache(file, now = Date.now()) {
+function readCache(file, now = Date.now(), credential = gw.env()) {
   try {
     const c = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!c || typeof c.at !== 'number') return null;
+    if (!c || c.cacheScope !== injectScope(projectDir(), credential.url, credential.vk) || typeof c.at !== 'number') return null;
     const age = now - c.at;
     if (age >= MAX_CACHE_AGE_MS) return null;
     c.ageMs = age;
@@ -716,8 +714,8 @@ function emitCollisionNotice() {
   );
 }
 
-function emitStaleNotice(file, cache, disc, signingIn) {
-  const { url, vk } = gw.env();
+function emitStaleNotice(file, cache, disc, signingIn, credential) {
+  const { url, vk } = credential;
   if (!url || !vk) {
     if (signingIn) {
       process.stdout.write(
@@ -783,9 +781,9 @@ const REFRESH_INTERVAL_MS = parseInt(
 // hourly throttle blocks it, injects a false statement into context — and the throttle
 // case is the common one, because refresh.cjs bumps the file's mtime even when it
 // carries facts forward, so an old `at` routinely pairs with a fresh mtime.
-function refreshWillRun(file, now = Date.now(), force = false) {
+function refreshWillRun(file, now = Date.now(), force = false, credential = gw.env()) {
   if (process.env.BIFROST_REFRESH === '0') return false;
-  const { url, vk } = gw.env();
+  const { url, vk } = credential;
   let cfgEnv = {};
   try { cfgEnv = pc.env(); } catch (_) {}
   const wantsConfig = cfgEnv.enabled && cfgEnv.keyappUrl && cfgEnv.vk;
@@ -804,12 +802,12 @@ function needsRefreshNow(cache, cfg) {
   return m.skipped === 'prime-off' || (m.head !== undefined && m.head !== headRef(projectDir()));
 }
 
-function spawnRefresh(file, force) {
-  if (!refreshWillRun(file, Date.now(), force)) return;
+function spawnRefresh(file, force, credential) {
+  if (!refreshWillRun(file, Date.now(), force, credential)) return;
   try {
     spawn(
       process.execPath,
-      [path.join(__dirname, 'refresh.cjs'), file, '--dir', projectDir()],
+      [path.join(__dirname, 'refresh.cjs'), file || '', '--dir', projectDir()],
       { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }
     ).unref();
   } catch (_) {}
@@ -1047,13 +1045,14 @@ function run(input) {
     if (input) { try { signingIn = maybeStartAutoLogin(input); } catch (_) {} }
     try { maybeStartMigration(); } catch (_) {}
     emitEndpointMigrationNotice();
-    emitContext();
+    const credential = gw.env();
+    emitContext(credential);
     // Verified-at-write-time config, straight off disk. No network, so a slow or dead
     // gateway can never delay or break session start — we just run on the last good config.
     let cfg = null;
     try { cfg = pc.loadCached(); } catch (_) {}
-    const file = cacheFile();
-    const cache = readCache(file);
+    const file = cacheFile(credential);
+    const cache = readCache(file, Date.now(), credential);
     // Behaviour observed in previous sessions, from the local counter. Never network,
     // never content — see hooks/usage.cjs.
     let use = null;
@@ -1066,12 +1065,12 @@ function run(input) {
     // gateway topology, not a query result. A tool that vanished since the last
     // refresh fails visibly on the first call; a roster withheld because it turned 24
     // hours old costs the model the knowledge that 243 tools exist at all.
-    try { disc = gw.readDiscoveryCacheSync(MAX_CACHE_AGE_MS); } catch (_) {}
+    try { disc = gw.readDiscoveryCacheSync(MAX_CACHE_AGE_MS, Date.now(), credential); } catch (_) {}
     // Computed once, before anything renders, so every "a refresh is running" claim in
     // this session agrees with what spawnRefresh will actually do at the end of main().
     let refreshing = false;
     const force = needsRefreshNow(cache, cfg);
-    try { refreshing = refreshWillRun(file, Date.now(), force); } catch (_) {}
+    try { refreshing = refreshWillRun(file, Date.now(), force, credential); } catch (_) {}
 
     try { emitPolicy(cfg); } catch (_) {}
     try { emitSkills(cache, cfg, use); } catch (_) {}
@@ -1079,9 +1078,9 @@ function run(input) {
     try { emitMemory(cache, cfg, use, refreshing); } catch (_) {}
     try { emitKb(cache, cfg, refreshing); } catch (_) {}
     try { emitConfigNotice(); } catch (_) {}
-    try { emitStaleNotice(file, cache, disc, signingIn); } catch (_) {}
+    try { emitStaleNotice(file, cache, disc, signingIn, credential); } catch (_) {}
     try { emitCollisionNotice(); } catch (_) {}
-    spawnRefresh(file, force);
+    spawnRefresh(file, force, credential);
   } catch (_) { /* silent-fail — never block session start */ }
   exitWhenFlushed();
 }

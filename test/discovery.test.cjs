@@ -14,6 +14,10 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 
 const gw = require('../hooks/lib/gateway.cjs');
+const { scopeKey, scopedDirectory, injectScope } = require('../hooks/lib/cache-scope.cjs');
+const fixtureUrl = 'https://g.example/mcp';
+const fixtureKey = 'k';
+const fixtureScope = scopeKey(fixtureUrl, fixtureKey);
 const { parseStructured, budgetFill, isExcludedForInjection } = require('../hooks/refresh.cjs');
 
 // This plugin's own repo is also a real working project: a genuine Claude Code
@@ -340,7 +344,7 @@ const sessionStart = require('../hooks/session-start.cjs');
 function cacheFileUsedBy(projDir) {
   const prev = process.env.CLAUDE_PROJECT_DIR;
   process.env.CLAUDE_PROJECT_DIR = projDir;
-  try { return sessionStart.cacheFile(); }
+  try { return sessionStart.cacheFile({ url: fixtureUrl, vk: fixtureKey }); }
   finally {
     if (prev === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prev;
   }
@@ -480,14 +484,14 @@ function tmpHome() {
 // The default itself is covered by runSessionStartUnprimed.
 function runSessionStart(env, home) {
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
-    env: { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', BIFROST_MEMORY_PRIME: '1', ...env },
+    env: { ...process.env, HOME: home, BIFROST_URL: fixtureUrl, BIFROST_VK: fixtureKey, BIFROST_REFRESH: '0', BIFROST_MEMORY_PRIME: '1', ...env },
     encoding: 'utf8',
     timeout: 10000,
   });
 }
 
 function runSessionStartUnprimed(env, home) {
-  const e = { ...process.env, HOME: home, BIFROST_URL: '', BIFROST_VK: '', ...env };
+  const e = { ...process.env, HOME: home, BIFROST_URL: fixtureUrl, BIFROST_VK: fixtureKey, BIFROST_REFRESH: '0', ...env };
   delete e.BIFROST_MEMORY_PRIME;
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'session-start.cjs')], {
     env: e, encoding: 'utf8', timeout: 10000,
@@ -497,7 +501,7 @@ function runSessionStartUnprimed(env, home) {
 function seedCache(home, projDir, payload) {
   const label = path.basename(projDir).replace(/[^A-Za-z0-9_-]/g, '_');
   const digest = crypto.createHash('sha256').update(projDir).digest('hex').slice(0, 12);
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
   // Facts only render for the HEAD they were recalled on; a temp dir has none ('').
   const withHead = { ...payload };
@@ -506,7 +510,7 @@ function seedCache(home, projDir, payload) {
   }
   fs.writeFileSync(
     path.join(dir, `inject-${label}-${digest}.json`),
-    JSON.stringify(Object.assign({ v: 2, at: Date.now() }, withHead))
+    JSON.stringify(Object.assign({ v: 2, at: Date.now(), cacheScope: injectScope(projDir, fixtureUrl, fixtureKey) }, withHead))
   );
   return dir;
 }
@@ -515,7 +519,7 @@ test('the tool roster is rendered from the discovery cache', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const dir = seedCache(home, proj, {});
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(),
     skills: null,
     memory: null,
@@ -534,7 +538,7 @@ test('the roster names actual tools, not just counts', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const dir = seedCache(home, proj, {});
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(),
     skills: null,
     memory: null,
@@ -551,7 +555,7 @@ test('a long tool list is truncated but keeps the true count', () => {
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const dir = seedCache(home, proj, {});
   const many = Array.from({ length: 30 }, (_, i) => `tool_${i}`);
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(), skills: null, memory: null, roster: { big: many },
   }));
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
@@ -566,7 +570,7 @@ test('the code-mode workflow names the correct readToolFile parameter', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const dir = seedCache(home, proj, {});
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(), skills: null, memory: null, roster: { tracker: ['a'] },
   }));
   const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
@@ -795,7 +799,7 @@ test('an unconfigured install says so instead of looking healthy', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   // No cache, no env credential, and a HOME with no ~/.claude.json to fall back to.
-  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj, BIFROST_URL: '', BIFROST_VK: '' }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /not configured for hooks/);
 });
@@ -1025,7 +1029,7 @@ test('a server reachable as a flat tool is excluded from the code-mode roster', 
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
   const dir = seedCache(home, proj, {});
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(),
     skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
     memory: null,
@@ -1045,18 +1049,18 @@ test('a server reachable as a flat tool is excluded from the code-mode roster', 
 // anything about precedence over the model's own skills.
 
 function runPromptSubmit(promptText, home, discovery) {
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify(
-    Object.assign({ at: Date.now(), skills: null, memory: null }, discovery)
+    Object.assign({ at: Date.now(), cacheScope: fixtureScope, skills: null, memory: null }, discovery)
   ));
   return spawnSync(process.execPath, [path.join(ROOT, 'hooks', 'prompt-submit.cjs')], {
     input: JSON.stringify({ prompt: promptText }),
     env: {
       ...process.env,
       HOME: home,
-      BIFROST_URL: 'https://gateway.example.test/mcp',
-      BIFROST_VK: 'test-key',
+      BIFROST_URL: fixtureUrl,
+      BIFROST_VK: fixtureKey,
     },
     encoding: 'utf8',
     timeout: 10000,
@@ -1134,8 +1138,8 @@ function runReflect(event, home, projectDir) {
       ...process.env,
       HOME: home,
       CLAUDE_PROJECT_DIR: proj,
-      BIFROST_URL: 'https://gateway.example.test/mcp',
-      BIFROST_VK: 'test-key',
+      BIFROST_URL: fixtureUrl,
+      BIFROST_VK: fixtureKey,
     },
     encoding: 'utf8',
     timeout: 10000,
@@ -1144,9 +1148,9 @@ function runReflect(event, home, projectDir) {
 
 function homeWithSkillsAndMemory() {
   const home = tmpHome();
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(),
     skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
     memory: { server: 'teammemory', mode: 'flat', tool: 'teammemory-memory_search' },
@@ -1420,9 +1424,9 @@ test('a stale discovery cache stops the tool roster being injected', () => {
   // injecting an arbitrarily old roster while the notice said context was skipped.
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now() - (365 * 24 * 60 * 60 * 1000),
     skills: null, memory: null, roster: { tracker: ['a', 'b'] },
   }));
@@ -1436,9 +1440,9 @@ test('a stale discovery cache stops the tool roster being injected', () => {
 test('the staleness notice names what was actually skipped', () => {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now() - (365 * 24 * 60 * 60 * 1000), skills: null, memory: null, roster: { t: ['a'] },
   }));
   const r = runSessionStart({
@@ -1462,7 +1466,7 @@ test('a large payload survives a piped run without truncation', () => {
   for (let i = 0; i < 13; i += 1) {
     roster[`server_${i}`] = Array.from({ length: 40 }, (_, j) => `tool_${i}_${j}`);
   }
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(),
     skills: { server: 'teamskills', mode: 'flat', tool: 'teamskills-skill_search' },
     memory: { server: 'teammemory', mode: 'flat', tool: 'teammemory-memory_search' },
@@ -1581,9 +1585,9 @@ function sessionWithCacheAge(ageMinutes, extraEnv) {
   const home = tmpHome();
   const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-age-'));
   const at = Date.now() - (ageMinutes * 60 * 1000);
-  const dir = path.join(home, '.cache', 'bifrost-plugin');
+  const dir = scopedDirectory(fixtureUrl, fixtureKey, home);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({
+  fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at,
     skills: { server: 's', mode: 'flat', tool: 's-skill_search' },
     memory: { server: 'm', mode: 'flat', tool: 'm-memory_search' },
@@ -1593,6 +1597,7 @@ function sessionWithCacheAge(ageMinutes, extraEnv) {
   const digest = crypto.createHash('sha256').update(proj).digest('hex').slice(0, 12);
   fs.writeFileSync(path.join(dir, `inject-${label}-${digest}.json`), JSON.stringify({
     v: 2,
+    cacheScope: injectScope(proj, fixtureUrl, fixtureKey),
     at,
     skills: { server: 's', mode: 'flat' },
     memory: { server: 'm', mode: 'flat', total: 1, head: '', facts: [{ content: 'f' }] },

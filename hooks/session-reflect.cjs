@@ -30,6 +30,7 @@ const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
+const { scopeKey } = require('./lib/cache-scope.cjs');
 
 // Sessions shorter than this are answering a question, not doing work worth recording.
 const MIN_TURNS_BEFORE_PROMPT = 3;
@@ -245,12 +246,15 @@ async function main() {
     // what produced the turn.
     if (event.stop_hook_active) return;
 
-    const { vk } = gw.env();
-    if (!vk) return;
+    const credential = gw.env();
+    const identity = scopeKey(credential.url, credential.vk);
+    if (!identity) return;
     const checkIn = shouldPrompt(event.session_id);
     if (!checkIn) return;
 
-    const caps = await gw.getCapabilities(0, { cacheOnly: true });
+    const caps = await gw.getCapabilities(0, { cacheOnly: true }, credential);
+    const current = gw.env();
+    if (scopeKey(current.url, current.vk) !== identity) return;
     // If the spool cannot be created (read-only checkout, permissions), stay silent
     // rather than instruct the agent to append to a path that provably does not work.
     const spool = ensureCandidateFile();
