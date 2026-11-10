@@ -84,7 +84,7 @@ const BUNDLE = {
 // `mutate` lets a test corrupt the manifest AFTER signing, i.e. exactly what an attacker
 // on the wire could do.
 function startMockKeyapp({ configVersion = 'v1', minBootstrapVersion = '1.0.0', schemaVersion = 1,
-                           signingKeyId = 'keyapp-v2', keys, mutate, bundleBody } = {}) {
+                           signingKeyId = 'keyapp-v2', keys, mutate, bundleBody, servedKeys } = {}) {
   const kp = keys || crypto.generateKeyPairSync('ed25519');
   const bundleJson = bundleBody !== undefined ? bundleBody : JSON.stringify(BUNDLE);
   const sha = crypto.createHash('sha256').update(JSON.stringify(BUNDLE)).digest('hex');
@@ -95,7 +95,7 @@ function startMockKeyapp({ configVersion = 'v1', minBootstrapVersion = '1.0.0', 
     if (req.url === '/plugin-config/public-key') {
       counts.key++;
       res.writeHead(200, { 'content-type': 'application/x-pem-file' });
-      return res.end(kp.publicKey.export({ type: 'spki', format: 'pem' }));
+      return res.end((servedKeys ? servedKeys() : kp).publicKey.export({ type: 'spki', format: 'pem' }));
     }
     if (req.url === '/plugin-config/manifest.json') {
       counts.manifest++;
@@ -297,11 +297,13 @@ test('unchanged content rejects unannounced key rotation and retains its pin', a
   const rotated = await startMockKeyapp();
   process.env.BIFROST_KEYAPP_URL = `http://127.0.0.1:${rotated.port}`;
   pc.writeCache(process.env.BIFROST_KEYAPP_URL, cached);
+  // This fixture deliberately moves the trusted pin to a fresh loopback port.
+  const rebound = pc.readCache(process.env.BIFROST_KEYAPP_URL);
   try {
     const r = await pc.refresh({ force: true });
     assert.equal(r.status, 'key-rotation-unannounced');
     assert.deepEqual(r.config, BUNDLE);
-    assert.deepEqual(pc.readCache(process.env.BIFROST_KEYAPP_URL), cached);
+    assert.deepEqual(pc.readCache(process.env.BIFROST_KEYAPP_URL), rebound);
     assert.equal(rotated.counts.bundle, 0);
   } finally { await rotated.close(); }
 });
@@ -362,6 +364,234 @@ test('cold cache + gateway down -> no config, still no throw', async () => {
   assert.equal(r.status, 'unreachable');
   assert.equal(r.config, null);
 });
+
+test('policy and refusal notices never cross identities at one endpoint', async () => {
+  const mock = await startMockKeyapp();
+  reset(mock.port);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  try {
+    assert.equal((await pc.refresh({})).status, 'updated');
+    pc.writeNotice(url, { status: 'bad-signature', message: 'identity A refusal' });
+    const fileA = pc.cacheFile(url);
+    process.env.BIFROST_VK = 'vk-test-identity-B';
+    assert.equal(pc.loadCached(), null);
+    assert.equal(pc.readNotice(url), null);
+    assert.notEqual(pc.cacheFile(url), fileA);
+    process.env.BIFROST_VK = 'vk-test-not-a-real-key';
+    assert.deepEqual(pc.loadCached(), BUNDLE);
+    assert.equal(pc.readNotice(url).message, 'identity A refusal');
+    delete process.env.BIFROST_VK;
+    assert.equal(pc.loadCached(), null);
+    assert.equal(pc.readNotice(url), null);
+  } finally { await mock.close(); }
+});
+
+test('an identity change during refresh cannot write policy or notices into the new identity', async () => {
+  let switchIdentity = false;
+  const mock = await startMockKeyapp({ mutate: m => {
+    if (switchIdentity) process.env.BIFROST_VK = 'vk-test-identity-B';
+    return m;
+  } });
+  reset(mock.port);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  try {
+    pc.writeNotice(url, { status: 'bad-signature', message: 'identity A refusal' });
+    process.env.BIFROST_VK = 'vk-test-identity-B';
+    pc.writeNotice(url, { status: 'bad-signature', message: 'identity B refusal' });
+    process.env.BIFROST_VK = 'vk-test-not-a-real-key';
+    switchIdentity = true;
+    assert.equal((await pc.refreshAndRecord({ force: true })).status, 'updated');
+    assert.equal(pc.loadCached(), null);
+    assert.equal(pc.readNotice(url).message, 'identity B refusal');
+    process.env.BIFROST_VK = 'vk-test-not-a-real-key';
+    assert.deepEqual(pc.loadCached(), BUNDLE);
+    assert.equal(pc.readNotice(url), null);
+  } finally { await mock.close(); }
+});
+
+test('legacy and wrong-identity cache files are cold misses', async () => {
+  const mock = await startMockKeyapp();
+  reset(mock.port);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  try {
+    const dir = path.join(HOME, '.cache', 'bifrost-plugin');
+    fs.mkdirSync(dir, { recursive: true });
+    const legacyKey = crypto.createHash('sha256').update(url).digest('hex').slice(0, 12);
+    const legacy = { at: Date.now(), bundle: BUNDLE, configVersion: 'legacy' };
+    fs.writeFileSync(path.join(dir, `plugin-config-${legacyKey}.json`), JSON.stringify(legacy));
+    fs.writeFileSync(path.join(dir, `plugin-config-notice-${legacyKey}.json`), JSON.stringify({ message: 'legacy' }));
+    assert.equal(pc.loadCached(), null);
+    assert.equal(pc.readNotice(url), null);
+    fs.writeFileSync(pc.cacheFile(url), JSON.stringify(legacy));
+    assert.equal(pc.loadCached(), null, 'an unbound payload was trusted under a scoped name');
+    assert.equal((await pc.refresh({})).status, 'updated');
+    const identityA = fs.readFileSync(pc.cacheFile(url), 'utf8');
+    assert.equal(identityA.includes(process.env.BIFROST_VK), false);
+    process.env.BIFROST_VK = 'vk-test-identity-B';
+    fs.writeFileSync(pc.cacheFile(url), identityA);
+    assert.equal(pc.loadCached(), null, 'identity A payload was trusted under identity B path');
+  } finally { await mock.close(); }
+});
+
+test('own offline policy survives while another identity or endpoint remains a cold miss', async () => {
+  const mock = await startMockKeyapp();
+  reset(mock.port);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  assert.equal((await pc.refresh({})).status, 'updated');
+  await mock.close();
+  assert.deepEqual((await pc.refresh({ force: true, timeoutMs: 100 })).config, BUNDLE);
+  process.env.BIFROST_VK = 'vk-test-identity-B';
+  assert.equal((await pc.refresh({ force: true, timeoutMs: 100 })).config, null);
+  process.env.BIFROST_VK = 'vk-test-not-a-real-key';
+  process.env.BIFROST_KEYAPP_URL = url + '/other';
+  assert.equal(pc.loadCached(), null);
+  assert.equal((await pc.refresh({ force: true, timeoutMs: 100 })).config, null);
+  process.env.BIFROST_KEYAPP_URL = url;
+  assert.deepEqual(pc.loadCached(), BUNDLE);
+});
+
+test('late refresh refusal records a notice only for its captured identity', async () => {
+  const mock = await startMockKeyapp({ mutate: m => {
+    process.env.BIFROST_VK = 'vk-test-identity-B';
+    return { ...m, signature: Buffer.alloc(64).toString('base64') };
+  } });
+  reset(mock.port);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  try {
+    assert.equal((await pc.refreshAndRecord({ force: true })).status, 'bad-signature');
+    assert.equal(pc.readNotice(url), null);
+    process.env.BIFROST_VK = 'vk-test-not-a-real-key';
+    assert.equal(pc.readNotice(url).status, 'bad-signature');
+  } finally { await mock.close(); }
+});
+
+test('a missing effective credential cannot read or create private cache files', () => {
+  reset(1);
+  const url = process.env.BIFROST_KEYAPP_URL;
+  delete process.env.BIFROST_VK;
+  assert.equal(pc.env().vk, '');
+  assert.equal(pc.cacheFile(url), null);
+  assert.equal(pc.noticeFile(url), null);
+  pc.writeCache(url, { bundle: BUNDLE, configVersion: 'must-not-write' });
+  pc.writeNotice(url, { status: 'bad-signature', message: 'must-not-write' });
+  assert.equal(pc.loadCached(), null);
+  assert.equal(pc.readNotice(url), null);
+  const dir = path.join(HOME, '.cache', 'bifrost-plugin');
+  assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], []);
+});
+
+test('an endpoint change during refresh cannot redirect the completed policy write', async () => {
+  let original;
+  const mock = await startMockKeyapp({ mutate: m => {
+    process.env.BIFROST_KEYAPP_URL = original + '/other';
+    return m;
+  } });
+  reset(mock.port);
+  original = process.env.BIFROST_KEYAPP_URL;
+  try {
+    assert.equal((await pc.refreshAndRecord({ force: true })).status, 'updated');
+    assert.equal(pc.loadCached(), null);
+    process.env.BIFROST_KEYAPP_URL = original;
+    assert.deepEqual(pc.loadCached(), BUNDLE);
+  } finally { await mock.close(); }
+});
+
+for (const seed of ['legacy', 'identity A']) {
+  test(`endpoint signing pin survives ${seed} migration into identity B`, async () => {
+    const originalKeys = crypto.generateKeyPairSync('ed25519');
+    const replacementKeys = crypto.generateKeyPairSync('ed25519');
+    let replaced = false;
+    let announced = false;
+    const mock = await startMockKeyapp({ keys: originalKeys,
+      servedKeys: () => replaced ? replacementKeys : originalKeys, mutate: m => {
+      if (!replaced) return m;
+      const fields = { ...m, signingKeyId: announced ? 'keyapp-v3' : m.signingKeyId };
+      return { ...fields, signature: crypto.sign(null,
+        Buffer.from(pc.canonicalManifestPayload(fields)), replacementKeys.privateKey).toString('base64') };
+    } });
+    reset(mock.port);
+    const url = process.env.BIFROST_KEYAPP_URL;
+    try {
+      if (seed === 'legacy') {
+        const dir = path.join(HOME, '.cache', 'bifrost-plugin');
+        fs.mkdirSync(dir, { recursive: true });
+        const key = crypto.createHash('sha256').update(url).digest('hex').slice(0, 12);
+        fs.writeFileSync(path.join(dir, `plugin-config-${key}.json`), JSON.stringify({
+          keyappUrl: url, publicKeyPem: originalKeys.publicKey.export({ type: 'spki', format: 'pem' }),
+          signingKeyId: 'keyapp-v2', bundle: { privateLegacy: true }, configVersion: 'legacy',
+        }));
+      } else {
+        assert.equal((await pc.refresh({ force: true })).status, 'updated');
+      }
+      process.env.BIFROST_VK = 'vk-test-identity-B';
+      assert.equal(pc.loadCached(), null);
+      replaced = true;
+      const rejected = await pc.refresh({ force: true });
+      assert.equal(rejected.status, 'key-rotation-unannounced');
+      assert.equal(rejected.config, null, 'legacy/other-user policy must never be reused');
+      assert.equal(pc.loadCached(), null);
+      replaced = false;
+      const before = mock.counts.bundle;
+      assert.equal((await pc.refresh({ force: true })).status, 'updated');
+      assert.equal(mock.counts.bundle, before + 1, 'valid legacy pin must fetch a fresh private bundle');
+      assert.deepEqual(pc.loadCached(), BUNDLE);
+      replaced = true;
+      announced = true;
+      assert.equal((await pc.refresh({ force: true })).status, 'unchanged');
+      assert.deepEqual(pc.loadCached(), BUNDLE);
+    } finally { await mock.close(); }
+  });
+}
+
+test('public signing trust is separated by endpoint and contains no private identity', async () => {
+  const first = await startMockKeyapp();
+  reset(first.port);
+  assert.equal((await pc.refresh({ force: true })).status, 'updated');
+  const firstUrl = process.env.BIFROST_KEYAPP_URL;
+  await first.close();
+  const other = await startMockKeyapp();
+  process.env.BIFROST_KEYAPP_URL = `http://127.0.0.1:${other.port}`;
+  try {
+    assert.equal((await pc.refresh({ force: true })).status, 'updated');
+    const dir = path.join(HOME, '.cache', 'bifrost-plugin');
+    const pins = fs.readdirSync(dir).filter(name => name.startsWith('plugin-signing-pin-'));
+    assert.equal(pins.length, 2);
+    for (const file of pins) {
+      const data = fs.readFileSync(path.join(dir, file), 'utf8');
+      assert.equal(data.includes(firstUrl), false);
+      assert.equal(data.includes(process.env.BIFROST_KEYAPP_URL), false);
+      assert.equal(data.includes(process.env.BIFROST_VK), false);
+      assert.deepEqual(Object.keys(JSON.parse(data)).sort(), ['publicKeyPem', 'signingKeyId']);
+    }
+  } finally { await other.close(); }
+});
+
+for (const failure of ['competing pin', 'write failure']) {
+  test(`a ${failure} cannot adopt unpinned private policy`, async () => {
+    const mock = await startMockKeyapp();
+    reset(mock.port);
+    const originalWrite = fs.writeFileSync;
+    const winner = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' });
+    let pinFile;
+    fs.writeFileSync = (file, data, options) => {
+      if (String(file).includes('plugin-signing-pin-')) {
+        pinFile = file;
+        if (failure === 'write failure') throw Object.assign(new Error('synthetic write failure'), { code: 'EACCES' });
+        // Another first-use refresh won exclusive creation just before this write.
+        originalWrite(file, JSON.stringify({ signingKeyId: 'keyapp-v2', publicKeyPem: winner }), options);
+      }
+      return originalWrite(file, data, options);
+    };
+    try {
+      const r = await pc.refresh({ force: true });
+      assert.equal(r.status, 'no-public-key');
+      assert.equal(r.config, null);
+      assert.equal(pc.loadCached(), null);
+      assert.ok(pinFile);
+      if (failure === 'competing pin') assert.equal(JSON.parse(fs.readFileSync(pinFile)).publicKeyPem, winner);
+    } finally { fs.writeFileSync = originalWrite; await mock.close(); }
+  });
+}
 
 // ---- kill switch ---------------------------------------------------------
 

@@ -34,6 +34,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
 const gw = require('./gateway.cjs');
+const { scopeKey } = require('./cache-scope.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -202,28 +203,82 @@ async function fetchBundle(keyappUrl, bundleUrl, expectedSha256, timeoutMs) {
 
 // Keyed by keyapp origin so two gateways never share (or clobber) each other's pinned
 // signing key and config.
-function cacheFile(keyappUrl) {
-  const key = crypto.createHash('sha256').update(keyappUrl || '').digest('hex').slice(0, 12);
-  return path.join(CACHE_DIR, `plugin-config-${key}.json`);
+// The full keyapp endpoint AND credential now partition that cache: users of one
+// gateway must not share per-user policy or notices. Legacy origin-only files are
+// deliberately ignored because their owning identity cannot be recovered safely.
+function cacheFile(keyappUrl, vk = env().vk) {
+  const key = scopeKey(keyappUrl, vk);
+  return key ? path.join(CACHE_DIR, `plugin-config-v2-${key}.json`) : null;
 }
 
 // Everything in here passed signature + sha256 verification before it was written.
-function readCache(keyappUrl) {
+function readCache(keyappUrl, vk = env().vk) {
   try {
-    const c = JSON.parse(fs.readFileSync(cacheFile(keyappUrl), 'utf8'));
-    if (c && c.bundle && c.configVersion) return c;
+    const c = JSON.parse(fs.readFileSync(cacheFile(keyappUrl, vk), 'utf8'));
+    if (c && c.cacheScope === scopeKey(keyappUrl, vk) && c.bundle && c.configVersion) return c;
   } catch (_) {}
   return null;
 }
 
-function writeCache(keyappUrl, entry) {
+function writeCache(keyappUrl, entry, vk = env().vk) {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    const f = cacheFile(keyappUrl);
+    const f = cacheFile(keyappUrl, vk);
+    if (!f) return;
     const tmp = `${f}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(entry), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify({ ...entry, cacheScope: scopeKey(keyappUrl, vk) }), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, f); // atomic — a torn cache file would read as "no config"
   } catch (_) {}
+}
+
+// Public signing trust belongs to the endpoint, not a private policy identity.
+// Keep one immutable pin per signingKeyId so account switches and announced
+// rotations cannot silently replace a key already trusted under that identifier.
+function publicPinFile(keyappUrl, signingKeyId) {
+  if (typeof signingKeyId !== 'string' || !signingKeyId) throw new Error('Missing signing key identity');
+  const digest = crypto.createHash('sha256')
+    .update(JSON.stringify(['bifrost-public-pin-v1', new URL(keyappUrl).href, signingKeyId]))
+    .digest('hex');
+  return path.join(CACHE_DIR, `plugin-signing-pin-${digest}.json`);
+}
+
+function readPublicPin(keyappUrl, signingKeyId, cached) {
+  const valid = pin => {
+    try {
+      return pin && pin.signingKeyId === signingKeyId &&
+        typeof signingKeyId === 'string' && signingKeyId.length > 0 &&
+        typeof pin.publicKeyPem === 'string' &&
+        crypto.createPublicKey(pin.publicKeyPem).asymmetricKeyType === 'ed25519'
+        ? pin.publicKeyPem : null;
+    } catch (_) { return null; }
+  };
+  try {
+    const pin = valid(JSON.parse(fs.readFileSync(publicPinFile(keyappUrl, signingKeyId), 'utf8')));
+    if (pin) return pin;
+  } catch (_) {}
+  // Only public key material is recovered from the old verified cache. Its
+  // per-user bundle and notices never become data for the new identity.
+  try {
+    const legacyKey = crypto.createHash('sha256').update(keyappUrl).digest('hex').slice(0, 12);
+    const legacy = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, `plugin-config-${legacyKey}.json`), 'utf8'));
+    if (new URL(legacy.keyappUrl).href === new URL(keyappUrl).href) {
+      const pin = valid(legacy);
+      if (pin) return pin;
+    }
+  } catch (_) {}
+  return valid(cached);
+}
+
+function writePublicPin(keyappUrl, signingKeyId, publicKeyPem) {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(publicPinFile(keyappUrl, signingKeyId),
+      JSON.stringify({ signingKeyId, publicKeyPem }), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    return true;
+  } catch (_) {
+    // A concurrent refresh may already have pinned this ID. Never overwrite it.
+    return readPublicPin(keyappUrl, signingKeyId, null) === publicKeyPem;
+  }
 }
 
 // ---- notices ------------------------------------------------------------
@@ -232,24 +287,29 @@ function writeCache(keyappUrl, entry) {
 // surfaced by the next SessionStart. Same marker pattern as auto-setup-result.json.
 // Cleared on any successful refresh so a fixed problem stops nagging.
 
-function noticeFile(keyappUrl) {
-  const key = crypto.createHash('sha256').update(keyappUrl || '').digest('hex').slice(0, 12);
-  return path.join(CACHE_DIR, `plugin-config-notice-${key}.json`);
+function noticeFile(keyappUrl, vk = env().vk) {
+  const key = scopeKey(keyappUrl, vk);
+  return key ? path.join(CACHE_DIR, `plugin-config-notice-v2-${key}.json`) : null;
 }
 
-function readNotice(keyappUrl) {
-  try { return JSON.parse(fs.readFileSync(noticeFile(keyappUrl), 'utf8')); } catch (_) { return null; }
+function readNotice(keyappUrl, vk = env().vk) {
+  try {
+    const notice = JSON.parse(fs.readFileSync(noticeFile(keyappUrl, vk), 'utf8'));
+    return notice && notice.cacheScope === scopeKey(keyappUrl, vk) ? notice : null;
+  } catch (_) { return null; }
 }
 
-function writeNotice(keyappUrl, obj) {
+function writeNotice(keyappUrl, obj, vk = env().vk) {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(noticeFile(keyappUrl), JSON.stringify({ at: Date.now(), ...obj }), 'utf8');
+    const file = noticeFile(keyappUrl, vk);
+    if (!file) return;
+    fs.writeFileSync(file, JSON.stringify({ at: Date.now(), ...obj, cacheScope: scopeKey(keyappUrl, vk) }), { encoding: 'utf8', mode: 0o600 });
   } catch (_) {}
 }
 
-function clearNotice(keyappUrl) {
-  try { fs.unlinkSync(noticeFile(keyappUrl)); } catch (_) {}
+function clearNotice(keyappUrl, vk = env().vk) {
+  try { fs.unlinkSync(noticeFile(keyappUrl, vk)); } catch (_) {}
 }
 
 // ---- refresh ------------------------------------------------------------
@@ -262,12 +322,12 @@ function clearNotice(keyappUrl) {
 //           unsupported-schema | bootstrap-too-old | bundle-unavailable | unreachable
 //
 // Every failure path leaves the existing verified cache untouched.
-async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
-  const { keyappUrl, vk, enabled } = env();
+async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}, credential = env()) {
+  const { keyappUrl, vk, enabled } = credential;
   if (!enabled) return { status: 'disabled', config: null };
   if (!keyappUrl || !vk) return { status: 'not-configured', config: null };
 
-  const cached = readCache(keyappUrl);
+  const cached = readCache(keyappUrl, vk);
 
   // Skip the network entirely while the cache is inside its TTL.
   if (!force && cached && typeof cached.at === 'number' && Date.now() - cached.at < ttlMs()) {
@@ -308,7 +368,7 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
   // Same keyId as pinned -> verify with the PINNED key and never re-fetch. That means a
   // silently-swapped server key (rotated without bumping signingKeyId) fails the
   // signature check instead of being trusted — which is exactly the point of pinning.
-  const pinned = cached && cached.signingKeyId === manifest.signingKeyId ? cached.publicKeyPem : null;
+  const pinned = readPublicPin(keyappUrl, manifest.signingKeyId, cached);
   let publicKeyPem = pinned;
   if (!publicKeyPem) {
     publicKeyPem = await fetchPublicKey(keyappUrl, timeoutMs);
@@ -331,7 +391,7 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
             `[bifrost] REFUSING plugin config: the gateway is serving a DIFFERENT signing key ` +
             `under the same signingKeyId "${manifest.signingKeyId}". A genuine key rotation must ` +
             'change signingKeyId. Keeping the last verified config. If this rotation was intended, ' +
-            `delete ${cacheFile(keyappUrl)} to re-pin.`,
+            'ask the gateway operator to publish a new signingKeyId.',
         };
       }
     }
@@ -348,9 +408,12 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
   // An announced rotation above fetches and verifies its new key, which must be pinned
   // even when the signed bundle content itself has not changed.
   if (cached && cached.configVersion === manifest.configVersion && cached.sha256 === manifest.sha256) {
+    if (!writePublicPin(keyappUrl, manifest.signingKeyId, publicKeyPem)) {
+      return { status: 'no-public-key', config: cached.bundle };
+    }
     writeCache(keyappUrl, {
       ...cached, at: Date.now(), signingKeyId: manifest.signingKeyId, publicKeyPem,
-    });
+    }, vk);
     return { status: 'unchanged', config: cached.bundle, configVersion: cached.configVersion };
   }
 
@@ -361,15 +424,17 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
     return { status: 'bundle-unavailable', config: cached ? cached.bundle : null };
   }
 
+  if (!writePublicPin(keyappUrl, manifest.signingKeyId, publicKeyPem)) {
+    return { status: 'no-public-key', config: cached ? cached.bundle : null };
+  }
   writeCache(keyappUrl, {
     at: Date.now(),
-    keyappUrl,
     configVersion: manifest.configVersion,
     sha256: manifest.sha256,
     signingKeyId: manifest.signingKeyId,
     publicKeyPem,
     bundle,
-  });
+  }, vk);
 
   return { status: 'updated', config: bundle, configVersion: manifest.configVersion };
 }
@@ -386,20 +451,21 @@ const NOTICE_STATUSES = new Set([
 ]);
 
 async function refreshAndRecord(opts) {
-  const { keyappUrl } = env();
-  const r = await refresh(opts);
+  const credential = env();
+  const { keyappUrl, vk } = credential;
+  const r = await refresh(opts, credential);
   if (!keyappUrl) return r;
-  if (NOTICE_STATUSES.has(r.status)) writeNotice(keyappUrl, { status: r.status, message: r.message });
-  else if (r.status === 'updated' || r.status === 'unchanged' || r.status === 'cached-fresh') clearNotice(keyappUrl);
+  if (NOTICE_STATUSES.has(r.status)) writeNotice(keyappUrl, { status: r.status, message: r.message }, vk);
+  else if (r.status === 'updated' || r.status === 'unchanged' || r.status === 'cached-fresh') clearNotice(keyappUrl, vk);
   return r;
 }
 
 // Sub-millisecond, zero network. This is what SessionStart calls: it only ever returns
 // a config that was fully verified at the time it was cached.
 function loadCached() {
-  const { keyappUrl, enabled } = env();
-  if (!enabled || !keyappUrl) return null;
-  const c = readCache(keyappUrl);
+  const { keyappUrl, vk, enabled } = env();
+  if (!enabled || !keyappUrl || !vk) return null;
+  const c = readCache(keyappUrl, vk);
   return c ? c.bundle : null;
 }
 
