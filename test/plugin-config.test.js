@@ -259,6 +259,77 @@ test('unchanged configVersion -> no bundle fetch and no key fetch', async () => 
   } finally { await mock.close(); }
 });
 
+for (const [name, mutation, status] of [
+  ['signature', (m) => ({ ...m, signature: Buffer.alloc(64).toString('base64') }), 'bad-signature'],
+  ['schema', (m) => ({ ...m, schemaVersion: 999 }), 'unsupported-schema'],
+  ['minimum version', (m) => ({ ...m, minBootstrapVersion: '99.0.0' }), 'bootstrap-too-old'],
+  ['signed minimum version', (m) => ({ ...m, minBootstrapVersion: '0.0.0' }), 'bad-signature'],
+  ['key id', (m) => ({ ...m, signingKeyId: 'tampered-key' }), 'bad-signature'],
+]) {
+  test(`unchanged content rejects tampered ${name} without renewing the verified cache`, async () => {
+    let corrupt = false;
+    const mock = await startMockKeyapp({ mutate: (m) => corrupt ? mutation(m) : m });
+    reset(mock.port);
+    try {
+      assert.equal((await pc.refresh({})).status, 'updated');
+      const url = process.env.BIFROST_KEYAPP_URL;
+      const cached = { ...pc.readCache(url), at: 1 };
+      pc.writeCache(url, cached);
+      corrupt = true;
+
+      const r = await pc.refreshAndRecord({ force: true });
+      assert.equal(r.status, status);
+      assert.deepEqual(r.config, BUNDLE);
+      assert.deepEqual(pc.readCache(url), cached, 'rejected manifest changed the verified cache');
+      assert.equal(mock.counts.bundle, 1, 'rejected manifest triggered a bundle request');
+      assert.equal(pc.readNotice(url).status, status, 'refusal was not recorded');
+    } finally { await mock.close(); }
+  });
+}
+
+test('unchanged content rejects unannounced key rotation and retains its pin', async () => {
+  const first = await startMockKeyapp();
+  reset(first.port);
+  await pc.refresh({});
+  const cached = pc.readCache(process.env.BIFROST_KEYAPP_URL);
+  await first.close();
+
+  const rotated = await startMockKeyapp();
+  process.env.BIFROST_KEYAPP_URL = `http://127.0.0.1:${rotated.port}`;
+  pc.writeCache(process.env.BIFROST_KEYAPP_URL, cached);
+  try {
+    const r = await pc.refresh({ force: true });
+    assert.equal(r.status, 'key-rotation-unannounced');
+    assert.deepEqual(r.config, BUNDLE);
+    assert.deepEqual(pc.readCache(process.env.BIFROST_KEYAPP_URL), cached);
+    assert.equal(rotated.counts.bundle, 0);
+  } finally { await rotated.close(); }
+});
+
+test('unchanged content accepts announced key rotation and pins the verified replacement', async () => {
+  const first = await startMockKeyapp();
+  reset(first.port);
+  await pc.refresh({});
+  const cached = pc.readCache(process.env.BIFROST_KEYAPP_URL);
+  await first.close();
+
+  const rotated = await startMockKeyapp({ signingKeyId: 'keyapp-v3' });
+  process.env.BIFROST_KEYAPP_URL = `http://127.0.0.1:${rotated.port}`;
+  pc.writeCache(process.env.BIFROST_KEYAPP_URL, cached);
+  try {
+    const r = await pc.refresh({ force: true });
+    assert.equal(r.status, 'unchanged');
+    assert.deepEqual(r.config, BUNDLE);
+    const next = pc.readCache(process.env.BIFROST_KEYAPP_URL);
+    assert.equal(next.signingKeyId, 'keyapp-v3');
+    assert.equal(next.publicKeyPem.trim(), rotated.keys.publicKey.export({ type: 'spki', format: 'pem' }).trim());
+    assert.equal(rotated.counts.bundle, 0);
+    assert.equal(rotated.counts.key, 1);
+    assert.equal((await pc.refresh({ force: true })).status, 'unchanged');
+    assert.equal(rotated.counts.key, 1, 'verified replacement key was not pinned');
+  } finally { await rotated.close(); }
+});
+
 test('within TTL -> ZERO network calls', async () => {
   const mock = await startMockKeyapp({ configVersion: 'v1' });
   reset(mock.port);
