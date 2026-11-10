@@ -280,13 +280,6 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
     return { status: 'unreachable', config: cached ? cached.bundle : null };
   }
 
-  // Unchanged config -> no key fetch, no bundle fetch. Just bump the cache timestamp
-  // so the TTL short-circuit above covers the next call.
-  if (cached && cached.configVersion === manifest.configVersion && cached.sha256 === manifest.sha256) {
-    writeCache(keyappUrl, { ...cached, at: Date.now() });
-    return { status: 'unchanged', config: cached.bundle, configVersion: cached.configVersion };
-  }
-
   if (manifest.schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
     return {
       status: 'unsupported-schema',
@@ -347,6 +340,18 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}) {
       config: cached ? cached.bundle : null,
       message: '[bifrost] REFUSING plugin config: manifest signature did not verify. Nothing applied.',
     };
+  }
+
+  // Unchanged config -> no key fetch, no bundle fetch. Just bump the cache timestamp
+  // so the TTL short-circuit above covers the next call.
+  // This optimization applies only after validation, with an unchanged pinned key.
+  // An announced rotation above fetches and verifies its new key, which must be pinned
+  // even when the signed bundle content itself has not changed.
+  if (cached && cached.configVersion === manifest.configVersion && cached.sha256 === manifest.sha256) {
+    writeCache(keyappUrl, {
+      ...cached, at: Date.now(), signingKeyId: manifest.signingKeyId, publicKeyPem,
+    });
+    return { status: 'unchanged', config: cached.bundle, configVersion: cached.configVersion };
   }
 
   // Signature is good — the manifest's sha256 is now a trusted commitment to the bundle bytes.
