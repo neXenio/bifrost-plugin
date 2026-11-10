@@ -59,6 +59,7 @@ const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
+const { injectFile, injectScope } = require('./lib/cache-scope.cjs');
 const { projectQuery, headRef } = require('./lib/project-query.cjs');
 
 const TIMEOUT_MS = 45000; // bumped for k=12 fetches; detached worker, latency is free
@@ -401,13 +402,13 @@ function budgetFill(results) {
 // `warningsOut`, if given an array, gets any `_system_warnings` found on this
 // response pushed into it (unfiltered by threshold — callers decide). Optional and
 // additive so existing callers/tests passing 3 args are unaffected.
-async function searchFacts(cap, query, wing, warningsOut) {
+async function searchFacts(cap, query, wing, warningsOut, credential = gw.env()) {
   // luca-memory v0.42 argument shape. Anything older rejects it and recall goes empty;
   // /bifrost-debug section 8 names that symptom.
   const args = { query, limit: FETCH_K, detail: 'l1' };
   if (wing) args.filters = { wing };
   if (USE_FAST) args.fast = true;
-  const text = await gw.callCapability(cap, 'memory_search', args, TIMEOUT_MS);
+  const text = await gw.callCapability(cap, 'memory_search', args, TIMEOUT_MS, credential);
   if (Array.isArray(warningsOut)) warningsOut.push(...extractSystemWarnings(text));
   const structured = parseStructured(text);
   const results = structured || extractFactsLegacy(text);
@@ -436,6 +437,10 @@ function writeCacheAtomic(file, data) {
 
 async function main() {
   const cacheFile = process.argv[2];
+  const credential = gw.env();
+  const dir = process.argv[3] === '--dir' ? (process.argv[4] || process.cwd()) : (process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  const expectedFile = injectFile(dir, credential.url, credential.vk);
+  const cacheScope = injectScope(dir, credential.url, credential.vk);
   const prime = primeEnabled();
   // '' means no project signal: skip recall rather than search on a generic default.
   // A missing argv (manual run) still gets the old default query.
@@ -446,7 +451,6 @@ async function main() {
   // HEAD the facts were recalled for; session-start renders them only while it matches.
   let head;
   if (prime && process.argv[3] === '--dir') {
-    const dir = process.argv[4] || process.cwd();
     ({ query, gitError } = projectQuery(dir, os.homedir()));
     // A failed git call leaves only a degraded query (the bare directory name). Searching
     // on it would overwrite good facts with unrelated ones; keep what is cached instead.
@@ -460,15 +464,14 @@ async function main() {
   // internally: a bad signature/hash leaves the last verified cache untouched.
   try { await pc.refreshAndRecord({}); } catch (_) {}
 
-  if (!cacheFile) return;
+  // A detached worker may start after the parent's credential changed. Never
+  // write the new identity into the parent's old (or legacy) cache destination.
+  if (!cacheFile || !expectedFile || path.resolve(cacheFile) !== expectedFile) return;
 
-  const { url, vk } = gw.env();
-  if (!url || !vk) return;
-
-  const caps = await gw.getCapabilities(TIMEOUT_MS);
+  const caps = await gw.getCapabilities(TIMEOUT_MS, {}, credential);
   if (!caps) return;
 
-  const out = { v: CACHE_SCHEMA, at: Date.now() };
+  const out = { v: CACHE_SCHEMA, cacheScope, at: Date.now() };
 
   if (caps.skills) {
     // No library size here on purpose. Telling the model "N skills available" is the
@@ -486,7 +489,7 @@ async function main() {
     out.memory = {
       server: caps.memory.server,
       mode: caps.memory.mode,
-      facts: prime && query ? await searchFacts(caps.memory, query, null, rawWarnings) : [],
+      facts: prime && query ? await searchFacts(caps.memory, query, null, rawWarnings, credential) : [],
     };
     // 'prime-off' is a deliberate skip like 'no-signal': nothing is carried forward.
     if (!prime) out.memory.skipped = 'prime-off';
@@ -507,7 +510,7 @@ async function main() {
     const kbQuery = (process.env.BIFROST_KB_QUERY || query || '').trim();
     if (prime && kbWing) {
       out.kb = kbQuery
-        ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing) }
+        ? { server: caps.memory.server, facts: await searchFacts(caps.memory, kbQuery, kbWing, undefined, credential) }
         : { server: caps.memory.server, facts: [], ...(gitError ? {} : { skipped: 'no-signal' }) };
       if (head !== undefined) out.kb.head = head;
     }
@@ -519,6 +522,7 @@ async function main() {
   // Mirrors the fail-closed contract the signed plugin-config path already has.
   try {
     const prev = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (prev.cacheScope !== cacheScope) throw new Error('Unbound context cache');
     // Facts cached before v2 came from the old query and are never rendered; facts
     // recalled on another branch belong to another query. Do not carry either forward.
     for (const k of ['memory', 'kb']) {

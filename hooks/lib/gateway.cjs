@@ -21,7 +21,11 @@ const { URL } = require('url');
 const keyCache = require('./key-cache.cjs');
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'bifrost-plugin');
-const DISCOVERY_CACHE = path.join(CACHE_DIR, 'discovery.json');
+const { scopeKey, scopedDirectory } = require('./cache-scope.cjs');
+function discoveryCacheFile(credential = env()) {
+  const dir = scopedDirectory(credential.url, credential.vk);
+  return dir ? path.join(dir, 'discovery.json') : null;
+}
 const DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h — server topology rarely changes
 
 // Hook processes are separate OS processes and do NOT inherit Claude Code's MCP
@@ -219,9 +223,8 @@ let transportSession;
 let requestId = 0;
 
 // Session state belongs to one endpoint/key pair and is never persisted to disk.
-async function rpc(method, params, timeoutMs) {
+async function rpc(method, params, timeoutMs, credential = env()) {
   try {
-    const credential = env();
     if (!credential.url || !credential.vk) return null;
     const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
     const deadline = Date.now() + budget;
@@ -422,10 +425,9 @@ function sseReader(expectedId) {
   };
 }
 
-async function handshake(timeoutMs) {
+async function handshake(timeoutMs, credential = env()) {
   let timer;
   try {
-    const credential = env();
     if (!credential.url || !credential.vk) return false;
     const budget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 3000;
     return !!(await Promise.race([
@@ -436,27 +438,29 @@ async function handshake(timeoutMs) {
   finally { clearTimeout(timer); }
 }
 
-function readCache() {
+function readCache(credential = env()) {
   try {
-    const c = JSON.parse(fs.readFileSync(DISCOVERY_CACHE, 'utf8'));
-    if (c && typeof c.at === 'number') return c;
+    const c = JSON.parse(fs.readFileSync(discoveryCacheFile(credential), 'utf8'));
+    if (c && c.cacheScope === scopeKey(credential.url, credential.vk) && typeof c.at === 'number') return c;
   } catch (_) {}
   return null;
 }
 
-function writeCache(disc) {
+function writeCache(disc, credential) {
   try {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(DISCOVERY_CACHE, JSON.stringify(disc), 'utf8');
+    const file = discoveryCacheFile(credential);
+    if (!file) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, JSON.stringify(disc), { encoding: 'utf8', mode: 0o600 });
   } catch (_) {}
 }
 
 // Inspect the gateway and decide how to reach skill-search and memory-search.
 // Returns { skills, memory } where each is null or { server, mode: 'flat'|'code' }.
-async function discover(timeoutMs) {
-  if (!(await handshake(timeoutMs))) return null;
+async function discover(timeoutMs, credential = env()) {
+  if (!(await handshake(timeoutMs, credential))) return null;
 
-  const flat = parseBody((await rpc('tools/list', {}, timeoutMs) || {}).body);
+  const flat = parseBody((await rpc('tools/list', {}, timeoutMs, credential) || {}).body);
   if (!flat || !Array.isArray(flat.result.tools)) return null;
   const flatTools = flat.result.tools;
   const flatNames = flatTools.map((t) => t.name);
@@ -506,7 +510,7 @@ async function discover(timeoutMs) {
   // call — so surfacing it discloses nothing the caller could not already reach.
   const roster = {};
   if (flatNames.includes('listToolFiles')) {
-    const cat = parseBody((await rpc('tools/call', { name: 'listToolFiles', arguments: {} }, timeoutMs) || {}).body);
+    const cat = parseBody((await rpc('tools/call', { name: 'listToolFiles', arguments: {} }, timeoutMs, credential) || {}).body);
     const text = cat && cat.result && cat.result.content
       ? cat.result.content.map((c) => c.text || '').join('')
       : '';
@@ -538,9 +542,9 @@ async function discover(timeoutMs) {
     }
     // Same caps as above. Parallel, so the whole catalog costs about one round trip.
     // A failed read keeps the last known tools rather than dropping the server.
-    const prev = (readCache() || {}).roster || {};
+    const prev = (readCache(credential) || {}).roster || {};
     await Promise.all(serverFiles.slice(0, 60).map(async (srv) => {
-      const r = parseBody((await rpc('tools/call', { name: 'readToolFile', arguments: { fileName: `servers/${srv}.pyi` } }, timeoutMs) || {}).body);
+      const r = parseBody((await rpc('tools/call', { name: 'readToolFile', arguments: { fileName: `servers/${srv}.pyi` } }, timeoutMs, credential) || {}).body);
       const body = r && r.result && r.result.content ? r.result.content.map((c) => c.text || '').join('') : '';
       const tools = [];
       for (const m of body.matchAll(/^def ([A-Za-z0-9_]{1,40})\(/gm)) {
@@ -565,19 +569,19 @@ async function discover(timeoutMs) {
     }
   }
 
-  return { at: Date.now(), skills, memory, roster };
+  return { at: Date.now(), cacheScope: scopeKey(credential.url, credential.vk), skills, memory, roster };
 }
 
 // Cached discovery; refreshes if missing/stale. Returns discovery or null.
-async function getCapabilities(timeoutMs, { refresh = false, cacheOnly = false } = {}) {
+async function getCapabilities(timeoutMs, { refresh = false, cacheOnly = false } = {}, credential = env()) {
   if (!refresh) {
-    const c = readCache();
+    const c = readCache(credential);
     if (c && Date.now() - c.at < DISCOVERY_TTL_MS) return c;
   }
-  if (cacheOnly) return readCache(); // never hit the network (per-prompt hook)
-  const disc = await discover(timeoutMs);
-  if (disc) writeCache(disc);
-  return disc || readCache(); // fall back to stale cache if the refresh failed
+  if (cacheOnly) return readCache(credential); // never hit the network (per-prompt hook)
+  const disc = await discover(timeoutMs, credential);
+  if (disc) writeCache(disc, credential);
+  return disc || readCache(credential); // fall back to stale cache if the refresh failed
 }
 
 // Resolve the flat tool name to call. Exported so the hooks print exactly what they
@@ -600,7 +604,7 @@ function flatToolName(cap, toolFn) {
 }
 
 // Call a discovered capability (flat or code-mode). Returns parsed text or null.
-async function callCapability(cap, toolFn, args, timeoutMs) {
+async function callCapability(cap, toolFn, args, timeoutMs, credential = env()) {
   if (!cap) return null;
   let resp;
   if (cap.mode === 'flat') {
@@ -609,13 +613,13 @@ async function callCapability(cap, toolFn, args, timeoutMs) {
     // siblings (skill_navigate, get_skill, memory_store, …) are built from the server
     // prefix, and a gateway exposing a bare tool with no prefix is called directly.
     const name = flatToolName(cap, toolFn);
-    resp = await rpc('tools/call', { name, arguments: args }, timeoutMs);
+    resp = await rpc('tools/call', { name, arguments: args }, timeoutMs, credential);
   } else {
     const kv = Object.entries(args)
       .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
       .join(', ');
     const code = `result = ${cap.server}.${toolFn}(${kv})`;
-    resp = await rpc('tools/call', { name: 'executeToolCode', arguments: { code } }, timeoutMs);
+    resp = await rpc('tools/call', { name: 'executeToolCode', arguments: { code } }, timeoutMs, credential);
   }
   const parsed = parseBody((resp || {}).body);
   if (!parsed || !parsed.result || !parsed.result.content) return null;
@@ -732,8 +736,8 @@ function detectServerNameCollision() {
 // it appeared. Callers pass the tolerance that matches what they are emitting; an
 // unbounded read is not offered, because that is what let a permanently dead gateway
 // inject a roster of arbitrary age.
-function readDiscoveryCacheSync(maxAgeMs, now = Date.now()) {
-  const c = readCache();
+function readDiscoveryCacheSync(maxAgeMs, now = Date.now(), credential = env()) {
+  const c = readCache(credential);
   if (!c || !Number.isFinite(maxAgeMs) || now - c.at >= maxAgeMs) return null;
   return c;
 }
@@ -753,5 +757,6 @@ module.exports = {
   sameEndpoint,
   flatToolName,
   discover,
-  DISCOVERY_CACHE,
+  discoveryCacheFile,
+  get DISCOVERY_CACHE() { return discoveryCacheFile(); },
 };

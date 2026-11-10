@@ -15,6 +15,7 @@ const os = require('os');
 const path = require('path');
 const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
+const { scopeKey } = require('./lib/cache-scope.cjs');
 const refresh = require('./refresh.cjs');
 
 const HOOK_ID = 'prompt-submit';
@@ -192,7 +193,7 @@ function renderLive(caps, skills, facts) {
   return out.length ? out.join('\n') + '\n' : '';
 }
 
-async function liveRecall(caps, query, cfg) {
+async function liveRecall(caps, query, cfg, credential) {
   const wantSkills = caps.skills && pc.hookFlag(cfg, HOOK_ID, 'skillSearch', 'BIFROST_PROMPT_SKILLS', true);
   const wantMemory = caps.memory && pc.hookFlag(cfg, HOOK_ID, 'memoryRecall', 'BIFROST_PROMPT_MEMORY', true);
   if (!wantSkills && !wantMemory) return null;
@@ -201,9 +202,9 @@ async function liveRecall(caps, query, cfg) {
   const minSim = Number(pc.hookField(cfg, HOOK_ID, 'memoryMinSimilarity', 'BIFROST_PROMPT_MEMORY_MIN', 0.55)) || 0.55;
 
   const [skillText, memText] = await Promise.all([
-    wantSkills ? withDeadline(gw.callCapability(caps.skills, 'skill_search', { query, k: MAX_SKILLS }, budget), budget) : null,
+    wantSkills ? withDeadline(gw.callCapability(caps.skills, 'skill_search', { query, k: MAX_SKILLS }, budget, credential), budget) : null,
     wantMemory ? withDeadline(gw.callCapability(caps.memory, 'memory_search',
-      { query, limit: MAX_FACTS, detail: 'l1', min_similarity: minSim }, budget), budget) : null,
+      { query, limit: MAX_FACTS, detail: 'l1', min_similarity: minSim }, budget, credential), budget) : null,
   ]);
   const skills = parseSkillNames(skillText);
   const facts = (refresh.parseStructured(memText) || [])
@@ -221,20 +222,26 @@ async function main() {
   try { event = JSON.parse(raw); } catch (_) { /* silent */ }
   const promptText = (event.prompt || event.user_prompt || event.message || '').trim();
   try {
-    const { vk } = gw.env();
+    const credential = gw.env();
+    const { url, vk } = credential;
+    const identity = scopeKey(url, vk);
     if (vk && promptText && !SYNTHETIC_RE.test(promptText) && TASK_VERB_RE.test(promptText)) {
       const snippet = promptText.slice(0, 120).replace(/\n+/g, ' ').trim();
-      const caps = await gw.getCapabilities(0, { cacheOnly: true });
       let cfg = null;
       try { cfg = pc.loadCached(); } catch (_) {}
+      const caps = await gw.getCapabilities(0, { cacheOnly: true }, credential);
       let text = null;
       if (caps) {
-        const live = await liveRecall(caps, promptText.slice(0, 600), cfg).catch(() => null);
+        const live = await liveRecall(caps, promptText.slice(0, 600), cfg, credential).catch(() => null);
+        const current = gw.env();
+        if (scopeKey(current.url, current.vk) !== identity) return exitWhenFlushed();
         if (live && live.skills.length) text = renderLive(caps, live.skills, live.facts);
         else if (live && live.facts.length) {
           text = (nudge(caps, snippet, alreadyNudged(event.session_id)) || '') + renderLive(caps, [], live.facts);
         }
       }
+      const current = gw.env();
+      if (scopeKey(current.url, current.vk) !== identity) return exitWhenFlushed();
       if (!text) text = nudge(caps, snippet, alreadyNudged(event.session_id));
       if (text) process.stdout.write(text);
     }
