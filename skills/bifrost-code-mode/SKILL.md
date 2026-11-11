@@ -5,7 +5,7 @@ description: "Call Bifrost gateway MCP servers that are NOT exposed as flat tool
 
 # Bifrost code mode
 
-Most servers on a Bifrost gateway are **not** flat tools. They do not appear in your
+Some servers on a Bifrost gateway are **not** exposed as flat tools. They do not appear in your
 tool list and `<prefix><server>-<tool>` does not exist for them (`mcp__plugin_bifrost-plugin_bifrost__` from the plugin, `mcp__claude_ai_luca_Bifrost__` from the claude.ai connector, `mcp__bifrost__` from a hand-added server). They are reached
 by writing a short Starlark snippet and running it with `executeToolCode`.
 
@@ -14,7 +14,7 @@ lacks it, and do not fall back to guessing from training data, until you have ch
 
 ## The four meta-tools
 
-Exact schemas, as the gateway advertises them:
+Common tool parameters; inspect the live advertised schema before calling:
 
 | Tool | Parameters | Required |
 |---|---|---|
@@ -78,8 +78,8 @@ common mistake, and it fails quietly — the call reports
 `Execution completed successfully.` with no return value.
 
 ```python
-result = gitlab.create_issue(project_id="123", title="Fix webhook")   # correct
-gitlab.create_issue(project_id="123", title="Fix webhook")            # returns nothing
+result = [n * n for n in [1, 2, 3]]   # explicit returned value
+[n * n for n in [1, 2, 3]]            # no result assignment
 ```
 
 **Call tools with keyword arguments**: `server.tool(param=value)`, as the `.pyi` stub
@@ -107,8 +107,9 @@ f-strings (use `"%s" % x`). Reach the outside world only through the server func
 **Built-in modules** (no import needed): `json.encode(obj)`, `json.decode(text)` and
 `math` (`math.sqrt`, `math.floor`, ...).
 
-**Failed calls do not abort the script.** A tool error comes back as a value with an
-`error` field, so check it before indexing:
+**Check failed calls.** Current Bifrost documentation says `isError: true` yields
+an error value. Transport failures and some plain-text errors stop execution; do
+not assume every failure is recoverable. Check an error value before indexing:
 
 ```python
 p = gitlab.get_project(project_id="123")
@@ -123,7 +124,8 @@ The reply then ends with `Execution completed, but 1 nested tool call failed.`
 **Numbers keep their type.** Integer ids from tool results stay `int`, so `str(p["id"])`
 gives `"87265108"`, not a float.
 
-**Limits.** One script may make at most 64 tool calls. Batch or narrow the query
+**Limits are deployment-specific.** The documented default is 64 nested tool calls;
+the operator can configure execution limits. Batch or narrow the query
 instead of looping over hundreds of items. Only `print()` output and `result` come
 back; raw tool responses are not echoed, so print what you need while debugging.
 
@@ -155,7 +157,7 @@ executeToolCode(code="result = 1")
 ```
 
 The roster is scoped to your virtual key: servers you may not call are absent, so
-anything listed is genuinely callable.
+listing confirms exposure, not successful execution or permission for every operation.
 
 ## Troubleshooting
 
@@ -164,14 +166,31 @@ anything listed is genuinely callable.
 | `fileName parameter is required` | Used `path=` instead of `fileName=` |
 | `Tool 'x' not found in server 'y'` | Wrong tool name; the error lists the valid ones |
 | Execution succeeds, no value | Missing `result =` assignment |
-| Syntax error on `for`/`if` | Top-level control flow; move it into a `def` |
+| Syntax error on `for`/`if` | Check syntax and deployed runtime; top-level loops work on the observed gateway. A `def` wrapper can support older runtimes. |
 | Server key undefined | Not in your key's scope — check the `Environment` block |
 | `nested tool call failed` | A call returned an error value; check `hasattr(r, "error")` |
-| Script stops after many calls | 64 tool calls per script cap; split or batch |
+| Script stops after many calls | Check the deployed call/time/step limits; split or batch |
 
 ## Relationship to flat tools
 
 A gateway mixes both modes. Flat tools (`<prefix><server>-<tool>`) are already in
-your tool list and should be called directly. Code mode is for everything else. A
-server never appears in both, so if you can see it as a flat tool, do not route it
-through `executeToolCode`.
+your tool list and should be called directly. Code mode is for everything else. Prefer the advertised flat tool when it covers the task. Whether a server is exposed
+in one mode or both depends on gateway configuration; inspect the catalog instead
+of inferring exclusivity.
+
+## Results and schemas
+
+Inside code mode, current Bifrost documentation describes structured results taking
+precedence over text, JSON text being decoded, and other text remaining a string.
+Inspect the returned shape before indexing; do not unconditionally JSON-decode a
+value already decoded by the sandbox. Outside code mode, inspect MCP
+`structuredContent` as well as `content` and `isError`.
+
+The hook client still requests MCP **2025-06-18**. Follow the schema advertised for
+the selected protocol: its tool input schemas describe objects. Do not impose that
+older restriction on a future 2026-07-28 client, whose schema/result rules changed.
+See the [migration plan](../../guidance/mcp-migration.md).
+
+Sources checked 2026-11-11: [Bifrost code mode](https://docs.getbifrost.ai/mcp/code-mode),
+[MCP 2025-06-18 tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools),
+[MCP 2026-07-28 tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools).

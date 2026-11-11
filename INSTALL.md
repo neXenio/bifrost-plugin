@@ -44,34 +44,15 @@ Run `/bifrost-setup` to verify.
 
 ## Method 1b — Claude Desktop / claude.ai
 
-Claude Desktop has three tabs (Code, Cowork, Chat), and each tab installs
-plugins differently. claude.ai on the web uses the same path as Chat and
-Cowork.
+Desktop Code follows the Claude Code plugin path above. Chat and Cowork do not
+prompt for the same configuration: Chat ignores MCP URLs containing user-config
+references, and Cowork skips entries referencing options without defaults. This
+plugin's `virtual_key` has no default. Installing its skills there does not prove
+MCP connectivity; Chat also does not run hooks.
 
-- **Desktop, Code tab:** click the `+` button next to the prompt box, then
-  Plugins, then Add plugin.
-- **Desktop, Chat and Cowork tabs, and claude.ai web:** open Customize in the
-  left sidebar, then the Plugins tab, then Browse plugins, then Add from a
-  repository, pointing at `neXenio/bifrost-plugin`. Plugins added this way
-  sync through your claude.ai account, not from `~/.claude`.
-
-Either path prompts for the gateway URL and a virtual key at install time,
-the same `userConfig` prompt as the CLI. The gateway URL is prefilled, so the
-key is the only thing to supply.
-
-Get the key at [https://bifrost.culture4.life/](https://bifrost.culture4.life/):
-sign in with your company account and the page shows your key with a copy
-button. The first visit creates it, later visits show the same one. Your
-sign-in address has to be on `luca-app.de` or `nexenio.com`, otherwise you
-get `403 domain not permitted` after logging in.
-
-Leaving the key blank needs the opt-in `auto_login` option instead (see
-[Virtual key or sign-in](README.md#virtual-key-or-sign-in) in the README).
-
-Hooks and subagents run in the Code and Cowork tabs. On the Chat tab and on
-claude.ai web they do not, so skills, slash commands, and the gateway's MCP
-tools still work there, while memory auto-injection, skill-discovery hints,
-and usage tracking are inactive. See the capability matrix in the README.
+Use an operator-supported connector with authentication verified on the intended
+surface. See the [dated support matrix](README.md#registration-and-connection-modes)
+and [platform reference](https://claude.com/docs/plugins/platform-support).
 
 ## Method 2 — `claude mcp add` (no plugin, MCP server only)
 
@@ -117,14 +98,15 @@ Run:
 /bifrost-setup
 ```
 
-It walks through the same `claude mcp add` registration (or, if your gateway
-operator has configured an SSO keyapp via `BIFROST_KEYAPP_URL`, offers the
-browser-based key provisioning flow). Onboarding only ever runs when you
+It guides plugin installation, configuration and verification. Manual CLI
+registration is the separate fallback in Method 2. If the operator provides a
+keyapp, the command also describes explicit browser-based provisioning. Onboarding only ever runs when you
 invoke this command explicitly — the plugin never launches it on its own. (The opt-in `auto_login` sign-in is separate; see "What the plugin touches" below.)
 
 ## Verify
 
-After install and restart:
+After updating the installed plugin, use `/reload-plugins` where supported or
+start a new session. Verify SessionStart in a new session:
 
 1. Open a new Claude Code session — you should see bifrost context injected at session start.
 2. Type: `"implement a new feature"` — expect a skill-discovery hint pointing at the gateway's skill-search tool.

@@ -14,7 +14,7 @@ CLI: `/plugin marketplace add neXenio/bifrost-plugin` then `/plugin install
 bifrost-plugin`. On Desktop and claude.ai, see the per-surface install steps
 in the `bifrost-onboard` skill.
 
-Installing prompts for the plugin's config values:
+In Claude Code, installing prompts for the plugin's config values:
 
 - **Gateway URL** (`gateway_url`): defaults to the shared gateway.
 - **Virtual key** (`virtual_key`, optional): paste the `vk_...` key your
@@ -82,14 +82,16 @@ run `/mcp` → `bifrost` → Reconnect (not Authenticate), or restart Claude Cod
 
 ## After install
 
-1. Restart Claude Code, or the Desktop app.
+1. In Claude Code, run `/reload-plugins` where supported, or start a new session.
+   Verify SessionStart in a new session; reloading does not erase existing context.
 2. Verify by running this command again or typing "set up bifrost".
 
 ## Verification checklist
 
 - `/plugin` (or `claude mcp list` / `/mcp` on the CLI) shows the `bifrost` server
 - The gateway's skill-search tool (`mcp__plugin_bifrost-plugin_bifrost__<skills-server>-skill_search`, or `mcp__bifrost__…` with a hand-added server) is reachable (MCP loaded)
-- SessionStart injects bifrost context at the top of each session (CLI and Desktop Code/Cowork only)
+- In Claude Code, SessionStart emits bifrost context on startup, clear or compact.
+  Chat has no hooks; Cowork connection support remains unverified for this manifest.
 - Memory tools (if your gateway exposes a memory server) are callable via `<prefix><memory-server>-search` (same prefix as above)
 
 ## Troubleshoot
@@ -104,3 +106,12 @@ blank at install to sign in with your company account instead. The plugin
 marks the virtual key field sensitive, so Claude Code keeps it out of plain
 config files. On the CLI-only path, without `--key`, the key is never written
 to any file. It lives only in your shell environment as `BIFROST_VK`.
+
+## Surface limits (checked 2026-11-11)
+
+Chat ignores the bundled `${user_config.gateway_url}` URL. Cowork does not prompt
+for user configuration and skips MCP entries referencing options without defaults,
+including this plugin's `virtual_key`. Installing skills is not proof of an MCP
+connection. Use the [support matrix](../README.md#registration-and-connection-modes)
+and an operator-supported connector for these surfaces.
+[Platform reference](https://claude.com/docs/plugins/platform-support).

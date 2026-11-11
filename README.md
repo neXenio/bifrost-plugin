@@ -4,7 +4,7 @@ Claude Code plugin for any [Bifrost](https://github.com/maximhq/bifrost) MCP
 gateway: plugin registration with lifecycle hooks, skill discovery, agent-driven memory, and MCP.
 
 **Primary Target: Claude Code Plugin Registration** (includes hooks, skills, and memory).
-*Standalone Remote MCP support is also available for Claude Desktop & web custom connectors.*
+*Other surfaces need a compatible connector and separate authentication verification.*
 
 The skill-discovery and memory features need a gateway that exposes a skill server
 and/or a memory server. Without them, the plugin still wires up the gateway and
@@ -23,14 +23,15 @@ degrades gracefully — those features simply no-op.
 
 ### The hooks, concretely
 
-Five hook events are registered in [`hooks/hooks.json`](./hooks/hooks.json), run by
-four scripts — `PostToolUse` and `PostToolUseFailure` share one. All of them fail
+Six hook events are registered in [`hooks/hooks.json`](./hooks/hooks.json), run by
+five scripts — `PostToolUse` and `PostToolUseFailure` share one. All of them fail
 silently and always exit 0, so a broken gateway can never block a session.
 
 | Event | Script | What it does |
 |-------|--------|--------------|
 | `SessionStart` | `session-start.cjs` | Emits the gateway primer, skill library, MCP tool roster and recalled memory, all from a local cache (no blocking network). Spawns the detached refresh worker afterwards. |
-| `UserPromptSubmit` | `prompt-submit.cjs` | On a prompt containing a task verb, adds one line pointing at the skill library. Full form once per session, then tapered. |
+| `UserPromptSubmit` | `prompt-submit.cjs` | On task prompts, attempts bounded live skill/memory recall; falls back to a tapered discovery hint. |
+| `PreToolUse` | `route-hint.cjs` | Suggests an advertised gateway server for matching direct service calls, once per server per session. |
 | `Stop` (async) | `session-reflect.cjs` | Every few turns, asks whether anything was learned worth appending to the project's `.bifrost/candidates.md`. Never writes memory itself. |
 | `PostToolUse` / `PostToolUseFailure` (async) | `usage.cjs` | Counts, per session, which capability classes were used and whether calls succeeded. Counts only — never queries, arguments or results, and nothing leaves the machine. `SessionStart` reads it back to decide how hard to push. |
 
@@ -38,61 +39,49 @@ Cached context is emitted for up to 14 days and labelled with its age once past 
 hours, rather than withheld — the session that has been away longest is the one that
 needs the primer most. A background refresh runs at most hourly.
 
+Automatic prompt recall can send up to 600 normalized prompt characters to enabled
+skill and memory tools. Likely-secret checks are heuristics, not complete protection.
+Set `BIFROST_PROMPT_RECALL=0` locally to disable this automatically sent query; server
+policy cannot override that opt-out. See [prompt privacy](docs/prompt-privacy.md).
+
 See [guidance/bifrost-guide.md](./guidance/bifrost-guide.md) for the full engineer guide.
 
 ---
 
 ## Registration and connection modes
 
-Claude Desktop is one app with three tabs (Code, Cowork, Chat), and each tab
-hosts plugins differently. Counting the CLI and claude.ai on the web, that is
-five surfaces the plugin can run on:
+Support assessment: **2026-11-11**, against the current platform documentation.
+Host component support does not prove that this plugin's authentication works there.
 
-| Surface | Skills | Slash commands | MCP tools | Hooks | Subagents |
-|---|---|---|---|---|---|
-| Claude Code CLI | yes | yes | yes | yes | yes |
-| Desktop, Code tab | yes | yes | yes | yes | yes |
-| Desktop, Cowork tab | yes | yes | yes | yes | yes |
-| Desktop, Chat tab | yes | yes | yes | **no** | **no** |
-| claude.ai web chat | yes | yes | yes | **no** | **no** |
+| Surface | This plugin's installation/connection status |
+|---|---|
+| Claude Code CLI, IDE, Desktop Code | Primary target. Install through `/plugin`, configure `gateway_url` and `virtual_key`, then verify `/mcp` and hook output. |
+| Desktop Cowork | Host supports hooks and skills, but skips MCP entries referencing an option without a default. This plugin's `virtual_key` has no default; its bundled MCP connection is **not established by installing it**. Separate compatible connector/configuration and an actual Cowork test are required. |
+| Desktop Chat / claude.ai chat | Host loads skills, treats commands as skills, and ignores hooks. It ignores MCP URLs containing `${user_config.*}`, including this plugin's URL. Use an operator-provided fixed-URL connector with supported authentication; this repository does not prove that connection. |
 
-> "Hooks and sub-agents run only in Cowork, so they appear grayed out in chat."
-> Source: [Use plugins in Claude](https://support.claude.com/en/articles/13837440-use-plugins-in-claude)
+See [Anthropic's platform support table](https://claude.com/docs/plugins/platform-support).
+Do not add a shared credential default or remove working Code configuration to make
+another surface accept the manifest. Manifest validation does not test a connection.
 
-On the Chat tab and on claude.ai web, this plugin's memory auto-injection,
-skill-discovery hints, and usage tracking do not run, because all three are
-hook-driven. What still works there: the four bundled skills, the five slash
-commands, and the gateway's MCP tools.
+### Install in Claude Code
 
-### Install
+Run `/plugin marketplace add neXenio/bifrost-plugin`, then `/plugin install
+bifrost-plugin`. Supply the gateway URL and personal key through plugin configuration;
+change them later with `/plugin configure`. No separate MCP registration or shell
+exports are needed for this path. Ask your gateway operator for key provisioning.
 
-- **Claude Code CLI:** `/plugin marketplace add neXenio/bifrost-plugin` → `/plugin install bifrost-plugin`
-- **Desktop, Code tab:** `+` button next to the prompt box → Plugins → Add plugin
-- **Desktop, Chat and Cowork tabs, and claude.ai web:** Customize (left sidebar) → Plugins tab → Browse plugins → Add from a repository, pointing at the GitHub repo. Plugins added this way sync through your claude.ai account, not from `~/.claude`.
-
-Every path prompts for the plugin's config at install time: the gateway URL
-(`gateway_url`, prefilled with `https://bifrost.culture4.life/mcp`) and a
-virtual key (`virtual_key`).
-
-Get the key yourself, no ticket needed. Open
-[https://bifrost.culture4.life/](https://bifrost.culture4.life/), sign in
-with your company account, and the page shows your key with a copy button.
-The first visit creates it, later visits show the same one, and there is a
-Rotate button if it ever leaks. Your sign-in address has to be on
-`luca-app.de` or `nexenio.com`, otherwise the page answers `403 domain not
-permitted` after an otherwise successful login.
-
-That is the whole install for someone who does not use a terminal: get the
-key, add the plugin, paste the key. The opt-in `auto_login` option removes the
-paste step by fetching the key through company sign-in.
+After updating the installed copy, run `/reload-plugins` where supported, or start a
+new session. A changed MCP configuration reconnects on reload; an unchanged one keeps
+its connection. Start a new session to verify SessionStart context. Repository commits
+do not update private mirrors, installed copies, or existing session context.
+[Reload behavior](https://code.claude.com/docs/en/plugins/components#server-names-tool-names-and-reloads).
 
 ### Virtual key or sign-in
 
 The virtual key (`vk_...`, self-served from
 [https://bifrost.culture4.life/](https://bifrost.culture4.life/)) is the auth
-path that works today, on every surface, with nothing set in your shell.
-Paste it into the `virtual_key` field at install time and the MCP connection
-is live.
+path for the Claude Code plugin configuration. Paste it into `virtual_key`,
+then verify the connection. Chat and Cowork have the limitations above.
 
 With `auto_login` on and `virtual_key` blank, the first interactive session
 opens the company sign-in page once and caches the key it gets back in
@@ -400,8 +389,8 @@ node scripts/install.js --dry-run             # prints the claude mcp add comman
 
 `bifrost-gateway-essentials` exists for a specific gap. The SessionStart hook
 injects a gateway-specific context block naming your real servers, skill library
-and memory corpus, but hooks run only in the Claude Code CLI and in Desktop's Code
-and Cowork tabs. On Desktop's Chat tab and on claude.ai web, nothing is injected.
+and memory corpus on Claude Code. Cowork supports hooks at the host level, but
+this plugin's MCP connection there remains unverified. Chat does not run hooks.
 Skill descriptions are loaded on every surface whether or not the skill is
 invoked, so that skill's description carries the parts that matter most —
 above all that a missing `<prefix><server>-<tool>` usually means the
@@ -459,10 +448,10 @@ Marketplace installs need no registration step at all: the plugin ships this
 ```
 
 `gateway_url` and `virtual_key` come from the plugin's `userConfig`, which
-Claude Code prompts for at install time on every surface (see [Registration
+Claude Code prompts for at install time (see [Registration
 and connection modes](#registration-and-connection-modes)).
 
-The manual fallback (`scripts/install.js`, or `/bifrost-setup`) registers a
+The manual fallback (`scripts/install.js`) registers a
 separate server at user scope via `claude mcp add --scope user`; the plugin
 never edits Claude Code config files on its own. That path still resolves
 `${BIFROST_URL}` and `${BIFROST_VK}` at runtime from Claude Code's
