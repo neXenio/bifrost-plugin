@@ -152,8 +152,12 @@ const SYNTHETIC_RE = /^\s*<(task-notification|command-|local-command|system-remi
 // skill_search returns "1. <name>  (score N)" lines. Names pass the identifier gate:
 // they land in context in the plugin's own voice.
 function parseSkillNames(text) {
+  if (typeof text !== 'string' || text.length > 65536) return [];
   const names = [];
-  for (const m of String(text || '').matchAll(/^\s*\d+\.\s+([A-Za-z0-9][A-Za-z0-9_-]{0,63})\s+\(score/gm)) {
+  // Live results may add [community] or [Author/Repository (License)]. Treat that
+  // bounded, single-line annotation as metadata; only the identifier is rendered.
+  const resultLine = /^[ \t]*\d{1,4}\.[ \t]+([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?:[ \t]+\[[^\[\]\r\n]{1,120}\])?[ \t]+\(score[ \t]+\d{1,12}(?:\.\d{1,8})?\)[ \t]*\r?$/gm;
+  for (const m of text.matchAll(resultLine)) {
     if (gw.isIdentifier(m[1]) && !names.includes(m[1])) names.push(m[1]);
     if (names.length >= MAX_SKILLS) break;
   }
