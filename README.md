@@ -367,7 +367,7 @@ node scripts/install.js --dry-run             # prints the claude mcp add comman
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js 22.x, 24.x or 26.x on PATH, using the latest patch release; other major lines are unsupported. Node.js 26 LTS is recommended.
 - Claude Code, or Claude Desktop, or claude.ai on the web
 - Your gateway's `/mcp` endpoint and a virtual key from your gateway operator, entered at the install prompt
 - If your gateway exposes a luca-memory server: **v0.42 or later**. v0.42 renamed and
@@ -540,7 +540,7 @@ the name is taken. With `BIFROST_KB_WING` set, the KB recall sends the same quer
 # 1. Remove / disable the plugin from Claude Code:
 #    /plugin   (then uninstall bifrost-plugin)   — or remove its dir under ~/.claude/plugins
 
-# 2. If you registered the server manually (installer or /bifrost-setup):
+# 2. If you registered the server manually with the fallback installer:
 claude mcp remove --scope user bifrost
 
 # 3. Remove BIFROST_* from ~/.claude/settings.json env and ~/.zshrc / ~/.bashrc if you added them.
