@@ -558,10 +558,19 @@ test('a long tool list is truncated but keeps the true count', () => {
   fs.writeFileSync(path.join(dir, 'discovery.json'), JSON.stringify({ cacheScope: fixtureScope,
     at: Date.now(), skills: null, memory: null, roster: { big: many },
   }));
-  const r = runSessionStart({ CLAUDE_PROJECT_DIR: proj }, home);
+  // Force the last tool into the independent featured-tool section.
+  const preload = path.join(home, 'featured-tool.cjs');
+  fs.writeFileSync(preload, 'Math.random = () => 0.999;');
+  const r = runSessionStart({
+    CLAUDE_PROJECT_DIR: proj,
+    NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+  }, home);
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /\*\*big\*\* \(30\)/, 'the full count must still be shown');
-  assert.ok(!r.stdout.includes('tool_29'), 'the sample must be truncated');
+  const sample = r.stdout.split('\n').find((line) => line.startsWith('- **big** (30):'));
+  assert.strictEqual(sample, '- **big** (30): tool_0, tool_1, tool_2, tool_3, …');
+  assert.match(r.stdout, /Featured tool this session:\*\* `big\.tool_29`/,
+    'a featured tool outside the sample must not invalidate truncation');
 });
 
 test('the code-mode workflow names the correct readToolFile parameter', () => {
