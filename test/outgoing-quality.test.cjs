@@ -56,5 +56,5 @@ test('release versions stay aligned across package and marketplace manifests', (
   const versions = ['package.json', '.claude-plugin/plugin.json', '.claude-plugin/marketplace.json']
     .map(file => JSON.parse(fs.readFileSync(path.join(ROOT, file), 'utf8')).version);
   assert.equal(new Set(versions).size, 1);
-  assert.equal(versions[0], '1.10.2');
+  assert.match(versions[0], /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'release version must be a stable semantic version');
 });
