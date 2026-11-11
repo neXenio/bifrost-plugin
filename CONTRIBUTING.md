@@ -2,12 +2,19 @@
 
 ## Running the tests
 
-```
-npm test
+Use a supported Node.js release (22.x, 24.x or 26.x). Run only the test files that
+cover your local change. For example, for package or manifest changes:
+
+```sh
+node --test test/manifest.test.cjs
 ```
 
-No dependencies and no network: the suite spins up loopback MCP stubs and drives the
-hooks as real subprocesses.
+Pass additional explicit test paths when a change affects several components.
+Reserve `npm test`, which runs the full suite, for GitHub Actions. The CI matrix
+covers Node.js 22, 24 and 26 with read-only repository permissions.
+
+No dependency installation or external service is needed for the tests: they spin
+up loopback MCP stubs and drive the hooks as real subprocesses.
 
 ## What the tests are for
 

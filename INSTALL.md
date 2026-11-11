@@ -2,9 +2,13 @@
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js 22.x, 24.x or 26.x, using the latest patch release. Node.js 26 LTS is recommended for new installations.
 - Claude Code (CC) with MCP + plugin support
 - Your gateway's `/mcp` endpoint URL (`BIFROST_URL`) and a virtual key (`BIFROST_VK`), from your gateway operator
+
+The hooks require `node` on your PATH. Node.js 18 and 20 are end of life and are
+no longer supported; update Node separately before installing the plugin. See the
+[Node.js release schedule](https://nodejs.org/en/about/previous-releases).
 
 ## Method 1 — CC marketplace (recommended)
 
