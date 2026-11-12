@@ -1,41 +1,28 @@
 # Distribution guide — rolling bifrost-plugin out to a team
 
-This covers what's needed to hand the plugin to a large team (e.g. 300 engineers)
-and what must be true **on the gateway side** first. The plugin is deliberately
-gateway-agnostic and safe-by-default; the gating work for a big rollout is
-infrastructure, not the plugin.
+This guide separates repository state, organization mirrors, installed clients,
+and running sessions. Assessment date: **2026-11-11**. Local validation is not
+fleet readiness or proof of Chat/Cowork connectivity.
 
-## Plugin readiness (v1.5.0)
+## Plugin behavior and rollout limits
 
-- **No secrets in the repo.** `.mcp.json` uses `${user_config.gateway_url}` /
-  `${user_config.virtual_key}` placeholders, filled from the install-time plugin
-  config prompt; each user supplies their own key. Verified by secret scan.
-- **Ships enabled** (`defaultEnabled: true` on the marketplace plugin entry) —
-  installing activates the plugin immediately. What gates a connection is the
-  key, not the enable flag: a user who leaves the virtual key blank at the
-  install prompt gets an inert plugin with no gateway traffic. Org admins who
-  want installs dormant regardless should flip this to `false` before importing
-  the marketplace.
-- **Session start never blocks.** The SessionStart hook does zero synchronous
-  network I/O: it reads a per-project cache (sub-ms). At most once per hour it
-  spawns a detached worker that contacts the gateway to refresh that cache —
-  the only data sent is the project directory basename plus a fixed recall
-  phrase, and `BIFROST_REFRESH=0` turns this off entirely. A slow or down
-  gateway adds ~0ms to startup.
-- **No side effects outside its own cache.** Hooks write only to
-  `~/.cache/bifrost-plugin/`. Nothing edits Claude Code configuration. By
-  default nothing launches other programs or opens browsers, and onboarding
-  runs via the explicit `/bifrost-setup` command. The exceptions are the
-  opt-in `auto_login` option (1.9.0, off by default; opens the browser once, caches
-  the key and rewrites this plugin's entry in `~/.claude/mcp-needs-auth-cache.json`)
-  and `migrate_legacy` (off by default; runs `claude mcp remove` for a hand-added
-  bifrost server), both covered below. The key
-  header is sent over HTTPS only (loopback excepted for local dev).
-- **Self-wiring.** Enabling the plugin registers the `bifrost` MCP server from the
-  shipped `.mcp.json`; no installer script required (a `claude mcp add` wrapper
-  remains as a fallback for non-plugin installs).
-- **Graceful degradation.** No key / no gateway / gateway missing a skills or
-  memory server → those features simply no-op; Claude Code is unaffected.
+- Claude Code is the primary supported installation path. Its plugin configuration
+  supplies `${user_config.gateway_url}` and `${user_config.virtual_key}`. The
+  marketplace entry enables the plugin by default; enabling does not prove auth.
+- Six hook events run five scripts: SessionStart, UserPromptSubmit, Stop,
+  PreToolUse, PostToolUse and PostToolUseFailure. See the [hook inventory](README.md#the-hooks-concretely).
+- SessionStart reads local identity/project-scoped caches and starts a detached
+  refresh. Background recall is opt-in; its query can include repository, branch,
+  ticket and directory context, not just a fixed phrase. PromptSubmit can send a
+  bounded prompt snippet to skill/memory search. `BIFROST_REFRESH=0` disables the
+  detached refresh, not all gateway use.
+- Hooks maintain local state; reflection can create a project candidate file.
+  Explicit onboarding and optional auto-login/migration have additional effects.
+  `auto_login` and `migrate_legacy` default off. Assess those options separately.
+- Do not infer Chat/Cowork MCP support from a valid manifest: Chat ignores this
+  user-config URL; Cowork skips the entry because the referenced virtual key lacks
+  a default. Keep per-user secrets out of defaults and use a separately verified
+  connector for those surfaces. [Platform support](https://claude.com/docs/plugins/platform-support).
 
 ## Importing as a claude.ai organization marketplace
 
@@ -43,24 +30,17 @@ If an org admin adds this plugin under **claude.ai admin settings → plugins**
 (rather than each engineer running `/plugin marketplace add`), two extra
 platform rules apply:
 
-1. **The source repo must be private or internal to the org's GitHub.** Public
-   repos are rejected for organization marketplaces — mirror this repo into a
-   private org repo and import that mirror.
-2. **Submissions pass automated safety screening** on top of
-   `claude plugin validate --strict`. v1.2.0 exists precisely to clear this
-   screen (no config writes, no browser launches, no cache rewrites, bounded
-   opt-out network use). Both validators pass clean as of v1.2.0. That claim holds
-   only with `auto_login` and `migrate_legacy` off, their default. An org build
-   that ships either one on opens a browser or runs `claude mcp remove` and
-   should be re-screened.
+Organization distribution has its own source, screening and administration rules.
+Check the current [organization sync requirements](https://claude.com/docs/plugins/org-sync)
+for the selected host before importing a mirror. Historical screening of another
+version is not approval of this revision or of opt-in login/migration features.
+Run manifest validation and test the intended surface separately.
 
-Because the MCP endpoint is an env template (`${BIFROST_URL}`), org-managed
-MCP allowlists cannot evaluate it by hostname. For a managed rollout, pin the
-concrete gateway URL in the private mirror's `.mcp.json` so admins can
-allowlist it, and provision keys per user (claude.ai web users get their key
-via the gateway's web-user endpoint; CLI users keep `BIFROST_VK` in their
-shell). Existing `vk_…` keys keep working unchanged — the web-user endpoint is
-additive, not an auth migration.
+The shipped endpoint is a **user-config template**, not `${BIFROST_URL}`. For a
+managed connector that needs a fixed URL, an operator may prepare a separate
+configuration using that endpoint and per-user authentication. A private mirror's
+URL alone does not establish header support or user identity in Chat/Cowork.
+Never embed a shared virtual key. Validate connector auth on the target surface.
 
 ### Auto-login for org-pushed installs (1.9.0)
 
@@ -110,13 +90,14 @@ the public build. Users can uninstall the disabled copy at leisure with
 
 ## Per-user onboarding (what each engineer does)
 
-1. `/plugin marketplace add neXenio/bifrost-plugin` then `/plugin install bifrost-plugin`
-2. Add `BIFROST_URL` and their `BIFROST_VK` to `~/.zshrc` (see README).
-3. `/plugin enable bifrost-plugin`, restart Claude Code.
+1. In Claude Code, `/plugin marketplace add neXenio/bifrost-plugin` then `/plugin install bifrost-plugin`.
+2. Supply gateway URL and personal key in plugin configuration; no shell exports are required.
+3. Enable the plugin, then `/reload-plugins` where supported or start a new session.
 4. Verify: `/mcp` lists `bifrost`; type "set up bifrost" / `/bifrost-debug` if not.
 
-> macOS: CC launched from Dock/Spotlight does not inherit `~/.zshrc`. Launch from a
-> terminal, or push the env vars via an MDM/launchd profile for fleet installs.
+> The manual CLI-registration fallback uses environment variables when configured
+> with runtime placeholders. Those variables must exist in the launching process;
+> a GUI launch does not necessarily inherit shell-profile exports.
 
 ## Gateway prerequisites — REQUIRED before a 300-user rollout
 
@@ -128,11 +109,9 @@ These are **not** solved by the plugin and must be in place first:
 2. **Virtual-key provisioning at scale.** 300 personal `vk_…` keys need to be
    minted and distributed securely (secrets manager / MDM — never a shared key,
    never in the repo). Plan revocation/rotation.
-3. **Memory/skill server capacity.** The memory server's `memory_search` degrades
-   badly under concurrent load (ChromaDB contention: ~0.03s solo → ~20s at a
-   handful of concurrent clients). At 300 users this must be addressed — e.g.
-   scale-out / read replicas / a concurrency-tolerant vector store — or memory and
-   skill-search calls will be slow. Note: the plugin's cached session-start hook is
+3. **Memory/skill server capacity.** Measure `memory_search` and skill-search latency
+   under the intended concurrent load. Historical single-deployment timings are
+   not a capacity estimate for the current service. Note: the plugin's cached session-start hook is
    unaffected (it never waits), but **mid-session** `memory_search` / `skill_search`
    latency is bounded by gateway capacity.
 4. **Rate limits / budgets per VK** so one user can't exhaust shared resources.
@@ -147,12 +126,12 @@ These are **not** solved by the plugin and must be in place first:
 - **Rollback**: push `/plugin disable bifrost-plugin` guidance or unpublish the
   marketplace entry. Since the plugin ships `defaultEnabled: true`, new installs
   are active, so unpublishing stops new installs but does not disable existing
-  ones — plan a disable broadcast, not just an unpublish. Nothing the plugin does
-  is destructive to a user's environment.
+  ones — plan a disable broadcast, not just an unpublish. Review opt-in migration separately: it can remove a matching manual MCP entry.
 
 ## Go / no-go
 
-- Plugin: **ready** (v1.5.0).
+- Plugin: validate the exact candidate revision and installed client version; no
+  blanket readiness claim follows from historical v1.5.0 testing.
 - Distribution to 300: **gated on gateway prerequisites 1–5 above.** Ship to the
   pilot first; do not fan out to 300 until the memory/skill server is proven under
   concurrent load.

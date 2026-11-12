@@ -9,8 +9,8 @@ with this plugin enabled gets:
 
 1. **Skill discovery** — task prompts can trigger an automatic skill search and
    receive matching skill names or a hint to search the library.
-2. **One-command onboarding** — `node scripts/install.js --key vk_…` (or the
-   `/bifrost-setup` slash command) wires the MCP entry in seconds.
+2. **Onboarding** — `/bifrost-setup` guides plugin installation and configuration.
+   `node scripts/install.js --key vk_…` is the separate manual-registration fallback.
 3. **Memory recall** — the prompt hook can search team memory and inject returned
    excerpts. The agent can also recall context and save decisions explicitly through
    the gateway's memory MCP tools. See [prompt privacy](../docs/prompt-privacy.md)
@@ -18,12 +18,12 @@ with this plugin enabled gets:
 
 ## Prerequisites
 
-- Node.js 18+ on PATH
-- `BIFROST_URL` env var set to your gateway's `/mcp` endpoint
-- `BIFROST_VK` env var set to your virtual key (issued by your gateway operator)
+- Node.js 22.x, 24.x or 26.x on PATH, using the latest patch release; other major lines are unsupported. Node.js 26 LTS is recommended.
+- Your gateway's `/mcp` endpoint and personal virtual key, entered in plugin configuration
+- For manual registration only: `BIFROST_URL` and `BIFROST_VK` in the launching environment
 - Claude Code with the bifrost-plugin installed
 
-## Configuration (env vars)
+## Environment overrides (optional for plugin installs)
 
 | Var | Purpose | Default |
 |-----|---------|---------|
@@ -33,22 +33,24 @@ with this plugin enabled gets:
 
 ## Onboarding (first time)
 
+Use `/bifrost-setup` in Claude Code for the plugin path. No separate registration
+is needed. If you cannot install the plugin, use this fallback from the repository:
+
 ```bash
 # From the plugin root:
 export BIFROST_URL=https://<your-gateway-host>/mcp
 node scripts/install.js --key vk_<your-key>
 
-# Or use the slash command inside Claude Code:
-/bifrost-setup
 ```
 
 The installer:
-1. Registers the bifrost MCP server via `claude mcp add --scope user` (idempotent —
-   re-running replaces the same entry; it never edits config files directly).
+1. Registers the bifrost MCP server via `claude mcp add --scope user`. Existing
+   entries are refused by Claude Code 2.1.322, not replaced. Inspect the existing
+   entry before deliberately changing it; the installer does not remove it.
 2. Without `--key`, stores the `${BIFROST_VK}` runtime template — you must set
    `export BIFROST_VK=…` in `~/.zshrc` (or `~/.bashrc`) yourself for the key
    to resolve.
-3. Tells you to restart CC, after which the gateway and skill-search tools are callable.
+3. Tells you to restart CC; then verify `/mcp` and an authorized read-only tool call.
 
 To append the skill-discovery MUST-stanza to your `~/.claude/CLAUDE.md`, the
 `bifrost-onboard` skill offers to do this idempotently (skips if the
@@ -69,29 +71,22 @@ restart Claude Code, and confirm the `bifrost` server appears in `/mcp`.
 
 ## Claude Desktop
 
-Claude Desktop installs the plugin itself rather than reading a project's
-`.mcp.json`. Code tab: `+` button next to the prompt box → Plugins → Add
-plugin. Chat and Cowork tabs, and claude.ai web: Customize (left sidebar) →
-Plugins → Browse plugins → Add from a repository. Either path prompts for the
-same config values as the CLI (gateway URL, virtual key, auto-login), and the
-bundled `.mcp.json` reads them back as `${user_config.gateway_url}`
-and so on. There is no separate env-var step.
-
-Leaving the virtual key blank leaves the server unauthenticated unless
-`auto_login` fetches a key through company sign-in. Since 1.9.0 the plugin
-ships no OAuth config: Claude Code never filled in its client ID, so that path
-could not complete. Use a virtual key or auto-login. See `/bifrost-debug` for
-the exact errors. For installs that cannot use the plugin at all, see README → Legacy
-fallback: Desktop local proxy.
+Desktop Code follows the Claude Code plugin path. Chat ignores MCP URLs containing
+user-config references, while Cowork skips entries referencing options without
+defaults and does not prompt for values. This plugin's virtual key has no default:
+installing its skills there does not establish a connection. Chat does not run hooks.
+Use a separately verified connector on those surfaces; see the dated
+[support matrix](../README.md#registration-and-connection-modes).
 
 ## Hooks
 
-The plugin registers five hooks across five Claude Code events:
+The plugin registers six Claude Code events across five hook scripts:
 
 | Event | Hook file | What it does |
 |-------|-----------|--------------|
 | `SessionStart` | `session-start.cjs` | Injects `guidance/bifrost-context.md` (~400 tokens) as session context |
 | `UserPromptSubmit` | `prompt-submit.cjs` | Automatic skill/memory searches and context, with a skill-search hint fallback; requires a gateway credential and a query that passes the local privacy checks |
+| `PreToolUse` | `route-hint.cjs` | On Bash/WebFetch calls, suggests a matching advertised gateway server once per server per session |
 | `Stop` | `session-reflect.cjs` (async) | Asks about memory candidates from the third turn of a session, then every eight |
 | `PostToolUse` | `usage.cjs` (async) | Records which capability classes were used, for successful bifrost tool calls |
 | `PostToolUseFailure` | `usage.cjs` (async) | Same usage recording, for failed bifrost tool calls |

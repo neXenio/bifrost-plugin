@@ -32,11 +32,14 @@ claude mcp add --scope user --transport http bifrost \
 
 The single-quoted `${BIFROST_VK}` is stored as a runtime template — Claude Code
 resolves it from your shell env on every launch, so the key itself is never
-written to disk. Re-running the command replaces the same entry (idempotent).
+written to disk by this registration. An existing entry is refused by Claude Code
+2.1.322; inspect it before deliberately changing it. This command does not replace it.
 
 ## Step 3 — Restart Claude Code
 
-MCP registration changes take effect only after a CC restart.
+For this manual registration path, start a new Claude Code session and verify `/mcp`.
+Plugin updates instead support `/reload-plugins`; unchanged MCP configurations retain
+their connection. See the [reload reference](https://code.claude.com/docs/en/plugins/components#server-names-tool-names-and-reloads).
 
 ## Step 4 — Verify
 
@@ -46,7 +49,7 @@ claude mcp get bifrost
 
 # Confirm env vars are set:
 echo "URL: ${BIFROST_URL:-NOT SET}"
-echo "VK: ${BIFROST_VK:+set (${#BIFROST_VK} chars)}${BIFROST_VK:-NOT SET}"
+test -n "${BIFROST_VK:-}" && echo "VK: set" || echo "VK: NOT SET"
 ```
 
 If your gateway exposes a skill server, then inside Claude Code call
@@ -61,27 +64,17 @@ claude mcp remove --scope user bifrost
 
 ## Claude Desktop
 
-Desktop has no shell, so `${BIFROST_URL}` and `${BIFROST_VK}` never resolve
-there, and it does not read this project's `.mcp.json`. The supported path is
-installing the plugin itself, which prompts for the gateway URL, virtual key
-and auto-login at install time and stores them as plugin config. The
-bundled `.mcp.json` reads those back as `${user_config.gateway_url}` and so on.
+Desktop Code follows the Claude Code plugin path: install through `/plugin`,
+configure the gateway and personal key, then verify `/mcp`.
 
-### Install the plugin (preferred)
-
-Desktop Code tab: `+` button next to the prompt box → Plugins → Add plugin.
-
-Desktop Chat and Cowork tabs, and claude.ai: Customize (left sidebar) →
-Plugins → Browse plugins → Add from a repository.
-
-Either path prompts for the gateway URL (keep the default unless your operator
-gave you a different one), a virtual key (paste the `vk_...` key your operator
-issued you), and the opt-in `auto_login` switch. Change any of these later
-with `/plugin configure`.
-
-Without a virtual key, `auto_login` fetches one through company sign-in. The
-plugin ships no OAuth config since 1.9.0 (Claude Code never filled in its
-client ID). See `/bifrost-debug` step 9.
+Chat and Cowork are different hosts. As documented on 2026-11-11, Chat ignores
+MCP URLs referencing `${user_config.*}`; Cowork skips entries whose referenced
+options lack defaults and does not prompt for values. This plugin references
+`virtual_key` without a default. Installing its skills there does not establish
+its MCP connection. Use a separately configured, operator-supported connector
+and verify it on that surface. Do not claim auto-login or hook coverage in Chat.
+See [platform support](https://claude.com/docs/plugins/platform-support) and the
+[repository support matrix](../../README.md#registration-and-connection-modes).
 
 ### Legacy fallback: local `mcp-remote` proxy
 

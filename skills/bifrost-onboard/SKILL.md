@@ -14,41 +14,25 @@ Ask your gateway operator for two values:
 - The gateway `/mcp` endpoint URL → `BIFROST_URL`
 - Your personal virtual key (`vk_…`) → `BIFROST_VK`
 
-## Step 2 — Run the installer
+## Step 2 — Install and configure the Claude Code plugin
 
-From the plugin root (or use the slash command — see below):
+Run `/plugin marketplace add neXenio/bifrost-plugin`, then `/plugin install
+bifrost-plugin`. Enter the gateway URL and personal virtual key in the plugin
+configuration. `/bifrost-setup` guides this plugin path; it is not an alias for
+the fallback installer. No extra MCP registration or shell exports are needed.
 
-```bash
-export BIFROST_URL=https://<your-gateway-host>/mcp
-node "${CLAUDE_PLUGIN_ROOT}/scripts/install.js" --key vk_<your-key>
-```
+For a machine that cannot install the plugin, use `bifrost-mcp-setup` instead.
+Its installer calls `claude mcp add --scope user`; an existing entry is refused,
+not replaced. Without `--key`, the registration uses a runtime environment
+placeholder; the user must provide `BIFROST_VK` in the launching environment.
 
-The installer:
-- Registers the bifrost MCP server via `claude mcp add --scope user` (idempotent — re-running replaces the same entry; it never edits config files directly).
-- Without `--key`, stores the `${BIFROST_VK}` runtime template. It does NOT modify your shell profile — you must add `export BIFROST_VK=…` to `~/.zshrc` (or `~/.bashrc`) yourself for the key to persist across sessions.
+## Step 3 — Load the installed copy
 
-Or run the slash command from inside Claude Code (same installer):
-
-```
-/bifrost-setup
-```
-
-## Step 3 — Persist the env vars, then restart Claude Code
-
-Add the export lines to your shell profile so they survive new shells:
-
-```bash
-echo 'export BIFROST_URL=https://<your-gateway-host>/mcp' >> ~/.zshrc   # or ~/.bashrc
-echo 'export BIFROST_VK=vk_<your-key>' >> ~/.zshrc
-source ~/.zshrc
-```
-
-Then restart CC so the MCP server and hooks are loaded.
-
-> macOS note: Claude Code launched from the Dock or Spotlight does NOT inherit
-> `~/.zshrc` exports. Launch CC from a terminal (`open` from a shell, or run the
-> `claude` CLI), or set the env vars via a launchd plist, otherwise the gateway
-> sees no key.
+Run `/reload-plugins` where supported, or start a new Claude Code session. A
+changed MCP configuration reconnects on reload; unchanged configurations keep
+their connection. Start a new session to verify SessionStart context. Updating a
+repository does not update an installed copy or an organization mirror.
+[Reload reference](https://code.claude.com/docs/en/plugins/components#server-names-tool-names-and-reloads).
 
 ## Step 4 — Smoke check
 
@@ -74,29 +58,17 @@ grep -q "## Skill Discovery" ~/.claude/CLAUDE.md \
 
 ## Step 6 — Claude Desktop (optional)
 
-Ask whether the user also wants the gateway in Claude Desktop. If yes, the
-plugin install itself is the setup: there is no separate registration step.
+Desktop Code uses the Claude Code configuration path above. Do not apply the
+same instructions to Chat or Cowork: Chat ignores MCP URLs containing user-config
+references, while Cowork skips entries referencing options without defaults and
+does not prompt for them. This plugin's virtual key has no default.
 
-1. Desktop Code tab: `+` button next to the prompt box → Plugins → Add
-   plugin. Desktop Chat and Cowork tabs, and claude.ai: Customize (left
-   sidebar) → Plugins → Browse plugins → Add from a repository.
-2. At the install prompt, fill in the gateway URL (keep the default unless
-   the operator gave you a different one) and paste the `vk_...` virtual key
-   the operator issued you.
-3. Verify: gateway tools appear in Desktop after install.
-
-Leaving the virtual key blank needs the opt-in `auto_login` option, which
-fetches the key through company sign-in. The plugin ships no OAuth config
-since 1.9.0.
-
-If login succeeds but requests fail with `no_virtual_key`, the operator has
-not mapped the user's identity to a virtual key yet. Ask them to add the user.
-
-Fallback, only for plugin versions before 1.5.0 or installs that cannot use
-the plugin at all: add an `mcp-remote` entry to
-`~/Library/Application Support/Claude/claude_desktop_config.json` (see README
-→ Legacy fallback: Desktop local proxy for the exact snippet; requires Node,
-and the file then holds the VK, so treat it as a secret).
+Skills may load while the MCP connection is absent. An operator must provide a
+compatible fixed-URL connector and supported authentication before claiming
+Chat/Cowork connectivity. Chat does not run hooks. Cowork host support for hooks
+does not prove this plugin has connected there. See the dated
+[support matrix](../../README.md#registration-and-connection-modes) and
+[platform documentation](https://claude.com/docs/plugins/platform-support).
 
 ## Troubleshooting
 

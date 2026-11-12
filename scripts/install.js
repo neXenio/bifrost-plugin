@@ -47,7 +47,7 @@ function printHelp() {
     'Effect:',
     '  Runs: claude mcp add --scope user --transport http bifrost <url> \\',
     '          --header "x-bf-vk: <key>"',
-    '  Re-running replaces the same entry — safe to run multiple times.',
+    '  An existing entry may be refused; this installer does not replace or remove it.',
     '',
   ].join('\n'));
 }
