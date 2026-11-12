@@ -17,6 +17,7 @@ const gw = require('./lib/gateway.cjs');
 const pc = require('./lib/plugin-config.cjs');
 const { scopeKey } = require('./lib/cache-scope.cjs');
 const refresh = require('./refresh.cjs');
+const { preparePromptQuery } = require('./lib/prompt-query.cjs');
 
 const HOOK_ID = 'prompt-submit';
 const MAX_SKILLS = 3;
@@ -152,8 +153,12 @@ const SYNTHETIC_RE = /^\s*<(task-notification|command-|local-command|system-remi
 // skill_search returns "1. <name>  (score N)" lines. Names pass the identifier gate:
 // they land in context in the plugin's own voice.
 function parseSkillNames(text) {
+  if (typeof text !== 'string' || text.length > 65536) return [];
   const names = [];
-  for (const m of String(text || '').matchAll(/^\s*\d+\.\s+([A-Za-z0-9][A-Za-z0-9_-]{0,63})\s+\(score/gm)) {
+  // Live results may add [community] or [Author/Repository (License)]. Treat that
+  // bounded, single-line annotation as metadata; only the identifier is rendered.
+  const resultLine = /^[ \t]*\d{1,4}\.[ \t]+([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?:[ \t]+\[[^\[\]\r\n]{1,120}\])?[ \t]+\(score[ \t]+\d{1,12}(?:\.\d{1,8})?\)[ \t]*\r?$/gm;
+  for (const m of text.matchAll(resultLine)) {
     if (gw.isIdentifier(m[1]) && !names.includes(m[1])) names.push(m[1]);
     if (names.length >= MAX_SKILLS) break;
   }
@@ -220,19 +225,24 @@ async function main() {
   const raw = await readStdin();
   let event = {};
   try { event = JSON.parse(raw); } catch (_) { /* silent */ }
-  const promptText = (event.prompt || event.user_prompt || event.message || '').trim();
+  const prompt = event.prompt || event.user_prompt || event.message || '';
+  const promptText = typeof prompt === 'string' ? prompt.trim() : '';
   try {
+    // Local privacy opt-out must take precedence even over locked server policy.
+    const enabled = !/^(?:0|false)$/i.test(String(process.env.BIFROST_PROMPT_RECALL || '').trim());
+    const query = preparePromptQuery(prompt, { enabled });
+    if (!query) return exitWhenFlushed();
     const credential = gw.env();
     const { url, vk } = credential;
     const identity = scopeKey(url, vk);
     if (vk && promptText && !SYNTHETIC_RE.test(promptText) && TASK_VERB_RE.test(promptText)) {
-      const snippet = promptText.slice(0, 120).replace(/\n+/g, ' ').trim();
+      const snippet = query.slice(0, 120);
       let cfg = null;
       try { cfg = pc.loadCached(); } catch (_) {}
       const caps = await gw.getCapabilities(0, { cacheOnly: true }, credential);
       let text = null;
       if (caps) {
-        const live = await liveRecall(caps, promptText.slice(0, 600), cfg, credential).catch(() => null);
+        const live = await liveRecall(caps, query, cfg, credential).catch(() => null);
         const current = gw.env();
         if (scopeKey(current.url, current.vk) !== identity) return exitWhenFlushed();
         if (live && live.skills.length) text = renderLive(caps, live.skills, live.facts);

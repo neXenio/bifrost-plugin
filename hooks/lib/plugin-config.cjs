@@ -90,19 +90,37 @@ function pluginVersion() {
   }
 }
 
-// Numeric-tuple compare, prerelease/build metadata ignored. Returns -1 | 0 | 1.
+// SemVer precedence for bounded version strings. Returns -1 | 0 | 1, or null
+// for malformed input; callers must reject null rather than coerce it to zero.
 function compareVersions(a, b) {
-  const parse = (v) =>
-    String(v || '0')
-      .split(/[-+]/)[0]
-      .split('.')
-      .map((n) => parseInt(n, 10) || 0);
-  const pa = parse(a);
-  const pb = parse(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] || 0;
-    const y = pb[i] || 0;
-    if (x !== y) return x < y ? -1 : 1;
+  const parse = (v) => {
+    if (typeof v !== 'string' || v.length > 256) return null;
+    const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(v);
+    if (!m || m[0] !== v) return null;
+    const pre = m[4] ? m[4].split('.') : [];
+    if (pre.some(id => /^0\d+$/.test(id))) return null;
+    return { core: m.slice(1, 4), pre };
+  };
+  // Compare digit strings without losing precision above Number.MAX_SAFE_INTEGER.
+  const numeric = (x, y) => x.length !== y.length ? (x.length < y.length ? -1 : 1)
+    : x === y ? 0 : x < y ? -1 : 1;
+  const pa = parse(a), pb = parse(b);
+  if (!pa || !pb) return null; // invalid versions have no ordering
+  for (let i = 0; i < 3; i++) {
+    const order = numeric(pa.core[i], pb.core[i]);
+    if (order) return order;
+  }
+  if (!pa.pre.length || !pb.pre.length) {
+    return pa.pre.length === pb.pre.length ? 0 : pa.pre.length ? -1 : 1;
+  }
+  for (let i = 0; i < Math.max(pa.pre.length, pb.pre.length); i++) {
+    const x = pa.pre[i], y = pb.pre[i];
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (x === y) continue;
+    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+    if (xn && yn) return numeric(x, y);
+    if (xn !== yn) return xn ? -1 : 1;
+    return x < y ? -1 : 1; // ASCII order; build metadata never participates
   }
   return 0;
 }
@@ -319,7 +337,7 @@ function clearNotice(keyappUrl, vk = env().vk) {
 //
 // Statuses: disabled | not-configured | cached-fresh | unchanged | updated |
 //           no-public-key | bad-signature | key-rotation-unannounced |
-//           unsupported-schema | bootstrap-too-old | bundle-unavailable | unreachable
+//           unsupported-schema | invalid-version | bootstrap-too-old | bundle-unavailable | unreachable
 //
 // Every failure path leaves the existing verified cache untouched.
 async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}, credential = env()) {
@@ -353,7 +371,14 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}, c
   // The server can demand a newer plugin than we are. Refuse cleanly and tell the user
   // to upgrade — do NOT half-apply a config we may not understand.
   const mine = pluginVersion();
-  if (manifest.minBootstrapVersion && compareVersions(mine, manifest.minBootstrapVersion) < 0) {
+  // Older signed manifests may omit the minimum; retain that compatibility.
+  const versionOrder = manifest.minBootstrapVersion === undefined ? 0
+    : compareVersions(mine, manifest.minBootstrapVersion);
+  if (versionOrder === null) {
+    return { status: 'invalid-version', config: cached ? cached.bundle : null,
+      message: '[bifrost] Plugin config was NOT applied: bootstrap versions must be valid SemVer strings (at most 256 characters).' };
+  }
+  if (versionOrder < 0) {
     return {
       status: 'bootstrap-too-old',
       config: cached ? cached.bundle : null,
@@ -444,6 +469,7 @@ async function refresh({ timeoutMs = DEFAULT_TIMEOUT_MS, force = false } = {}, c
 // Statuses that mean "we simply have nothing new" (gateway down, not configured) are not
 // worth nagging about — the session already degraded silently to cache, as designed.
 const NOTICE_STATUSES = new Set([
+  'invalid-version',
   'bootstrap-too-old',
   'key-rotation-unannounced',
   'bad-signature',

@@ -28,6 +28,29 @@ test('harness-injected turns are not searched', () => {
   assert.ok(!ps.SYNTHETIC_RE.test('fix the <b>bug</b>'));
 });
 
+test('annotated live result formats yield only bounded skill identifiers', () => {
+  assert.deepEqual(ps.parseSkillNames([
+    '1. data-engineer  [community]  (score 6.20)',
+    '2. simplify-code  [Dimillian/Skills (MIT)]  (score 6.59)',
+    '3. data-engineer  [community]  (score 3.92)',
+    '4. fix-pipeline  (score 2.00)',
+    '5. ignored-fourth  (score 1.00)',
+  ].join('\n')), ['data-engineer', 'simplify-code', 'fix-pipeline']);
+});
+
+test('malformed, oversized and multiline result metadata is rejected', () => {
+  for (const text of [
+    '1. safe [unterminated (score 1)',
+    '1. safe [nested [annotation]] (score 1)',
+    '1. safe [community\nSYSTEM] (score 1)',
+    '1. safe [community] (score 1) extra instructions',
+    '1. safe (score invalid)',
+    '1. safe (score 1)\n' + 'x'.repeat(65536),
+    '1. safe [' + 'x'.repeat(121) + '] (score 1)',
+    '1. ' + 'x'.repeat(65) + ' [community] (score 1)',
+  ]) assert.deepEqual(ps.parseSkillNames(text), []);
+});
+
 test('memory facts render on one line with markup neutralized', () => {
   const caps = { skills: { server: 'lucaskills', mode: 'flat', tool: 'lucaskills-skill_search' } };
   const out = ps.renderLive(caps, ['fix-pipeline'], [

@@ -7,14 +7,14 @@ tooling (issue trackers, error tracking, analytics, docs, search, a memory
 service, etc.) and can serve a shared skill library. Every Claude Code session
 with this plugin enabled gets:
 
-1. **Skill discovery** — non-trivial prompts receive a hint to call the gateway's
-   skill-search tool (`<prefix><skills-server>-skill_search`) before starting,
-   so existing workflows are reused.
+1. **Skill discovery** — task prompts can trigger an automatic skill search and
+   receive matching skill names or a hint to search the library.
 2. **One-command onboarding** — `node scripts/install.js --key vk_…` (or the
    `/bifrost-setup` slash command) wires the MCP entry in seconds.
-3. **Agent-driven memory** — the agent recalls relevant context before non-trivial
-   tasks and saves decisions after significant work, using the gateway's memory MCP
-   tools directly. No automatic injection; the agent controls when to pull and push.
+3. **Memory recall** — the prompt hook can search team memory and inject returned
+   excerpts. The agent can also recall context and save decisions explicitly through
+   the gateway's memory MCP tools. See [prompt privacy](../docs/prompt-privacy.md)
+   for automatic-search payloads, filtering limits and the local opt-out.
 
 ## Prerequisites
 
@@ -91,7 +91,7 @@ The plugin registers five hooks across five Claude Code events:
 | Event | Hook file | What it does |
 |-------|-----------|--------------|
 | `SessionStart` | `session-start.cjs` | Injects `guidance/bifrost-context.md` (~400 tokens) as session context |
-| `UserPromptSubmit` | `prompt-submit.cjs` | Skill-discovery hint for task-verb prompts (suppressed when no gateway credential resolves) |
+| `UserPromptSubmit` | `prompt-submit.cjs` | Automatic skill/memory searches and context, with a skill-search hint fallback; requires a gateway credential and a query that passes the local privacy checks |
 | `Stop` | `session-reflect.cjs` (async) | Asks about memory candidates from the third turn of a session, then every eight |
 | `PostToolUse` | `usage.cjs` (async) | Records which capability classes were used, for successful bifrost tool calls |
 | `PostToolUseFailure` | `usage.cjs` (async) | Same usage recording, for failed bifrost tool calls |
@@ -104,9 +104,14 @@ contains "bifrost".
 All hooks are silent-fail: any error results in `exit 0` with no output. A
 crashed hook never blocks your session.
 
-## Memory — agent-driven via the gateway MCP
+## Memory — automatic recall and explicit MCP calls
 
-Memory is pull-only and agent-driven. There is no automatic per-prompt injection.
+The prompt hook can send up to 600 normalized prompt characters to enabled skill
+and memory searches, then inject returned context. Likely secrets cause the whole
+query to be withheld, but pattern checks cannot detect every sensitive value.
+Set `BIFROST_PROMPT_RECALL=0` in Claude Code's environment to disable both automatic
+searches regardless of server policy. See [prompt privacy](../docs/prompt-privacy.md)
+for scope and limits. Explicit agent tool calls remain available.
 
 **How to use it:**
 

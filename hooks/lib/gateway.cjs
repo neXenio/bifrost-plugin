@@ -105,10 +105,8 @@ function readCredentialFromMcpConfig() {
     return null;
   };
 
-  // Order matters: THIS project's own server, then user scope, then anything else.
-  // Iterating `Object.values(cfg.projects)` first would hand the current session an
-  // unrelated project's key in insertion order, and virtual keys carry role scope, so
-  // the agent would silently run under the wrong authorization.
+  // Only this project's server and the intended user scope may supply credentials.
+  // Other project entries carry their own authorization and must never be borrowed.
   const here = (process.env.CLAUDE_PROJECT_DIR || process.cwd() || '').trim();
   const projects = cfg.projects || {};
 
@@ -118,11 +116,6 @@ function readCredentialFromMcpConfig() {
   const user = fromMap(cfg.mcpServers);
   if (user) return user;
 
-  for (const [dir, proj] of Object.entries(projects)) {
-    if (dir === here) continue;
-    const hit = fromMap(proj && proj.mcpServers);
-    if (hit) return hit;
-  }
   return null;
 }
 

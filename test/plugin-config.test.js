@@ -263,6 +263,7 @@ for (const [name, mutation, status] of [
   ['signature', (m) => ({ ...m, signature: Buffer.alloc(64).toString('base64') }), 'bad-signature'],
   ['schema', (m) => ({ ...m, schemaVersion: 999 }), 'unsupported-schema'],
   ['minimum version', (m) => ({ ...m, minBootstrapVersion: '99.0.0' }), 'bootstrap-too-old'],
+  ['malformed minimum version', (m) => ({ ...m, minBootstrapVersion: 'not-a-version' }), 'invalid-version'],
   ['signed minimum version', (m) => ({ ...m, minBootstrapVersion: '0.0.0' }), 'bad-signature'],
   ['key id', (m) => ({ ...m, signingKeyId: 'tampered-key' }), 'bad-signature'],
 ]) {
@@ -652,7 +653,73 @@ test('version compare', () => {
   assert.equal(pc.compareVersions('1.1.0', '1.2.0'), -1);
   assert.equal(pc.compareVersions('1.2.0', '1.2.0'), 0);
   assert.equal(pc.compareVersions('1.10.0', '1.9.0'), 1);
-  assert.equal(pc.compareVersions('1.2.0-beta.1', '1.2.0'), 0); // prerelease ignored
+  assert.equal(pc.compareVersions('1.2.0-beta.1', '1.2.0'), -1);
+});
+
+test('SemVer prerelease precedence, numeric precision and build metadata', () => {
+  const ordered = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta',
+    '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0'];
+  for (let i = 1; i < ordered.length; i++) {
+    assert.equal(pc.compareVersions(ordered[i - 1], ordered[i]), -1);
+    assert.equal(pc.compareVersions(ordered[i], ordered[i - 1]), 1);
+  }
+  assert.equal(pc.compareVersions('1.0.0+build.001', '1.0.0+other'), 0);
+  assert.equal(pc.compareVersions('1.0.0-alpha+build.001', '1.0.0-alpha'), 0);
+  assert.equal(pc.compareVersions('1.0.0-9007199254740992', '1.0.0-9007199254740993'), -1);
+  assert.equal(pc.compareVersions('9007199254740993.0.0', '9007199254740992.0.0'), 1);
+  assert.equal(pc.compareVersions('1.0.0-Z', '1.0.0-a'), -1);
+});
+
+test('malformed versions have no ordering and cannot silently become zero', () => {
+  for (const invalid of [null, 0, '', 'v1.2.3', '1.2', '1.2.3.4', '01.2.3', '1.2.3-01',
+    '1.2.3-', '1.2.3+', '1.2.3-alpha..1', '1.2.3+a..b', '1.2.3\n', ' 1.2.3',
+    '1.2.3-' + 'a'.repeat(256)]) {
+    assert.equal(pc.compareVersions(invalid, '1.2.3'), null);
+    assert.equal(pc.compareVersions('1.2.3', invalid), null);
+  }
+});
+
+test('a prerelease plugin cannot apply a signed policy requiring its stable version', async () => {
+  const mock = await startMockKeyapp({ minBootstrapVersion: '1.2.0' });
+  reset(mock.port);
+  const readFile = fs.readFileSync;
+  const packageFile = path.resolve(__dirname, '../package.json');
+  fs.readFileSync = (file, ...args) => path.resolve(String(file)) === packageFile
+    ? JSON.stringify({ version: '1.2.0-beta.1' }) : readFile(file, ...args);
+  try {
+    const r = await pc.refresh({ force: true });
+    assert.equal(r.status, 'bootstrap-too-old');
+    assert.equal(r.config, null);
+    assert.equal(mock.counts.bundle, 0);
+  } finally { fs.readFileSync = readFile; await mock.close(); }
+});
+
+test('a signed malformed minimum version fails closed before fetching a bundle', async () => {
+  for (const minBootstrapVersion of ['not-a-version', '', null, 0]) {
+    const mock = await startMockKeyapp({ minBootstrapVersion });
+    reset(mock.port);
+    try {
+      const r = await pc.refreshAndRecord({ force: true });
+      assert.equal(r.status, 'invalid-version');
+      assert.equal(r.config, null);
+      assert.equal(mock.counts.bundle, 0);
+      assert.equal(pc.readNotice(process.env.BIFROST_KEYAPP_URL).status, 'invalid-version');
+    } finally { await mock.close(); }
+  }
+});
+
+test('a signed manifest without a minimum version retains legacy compatibility', async () => {
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const mock = await startMockKeyapp({ keys, mutate: ({ minBootstrapVersion, ...manifest }) => ({
+    ...manifest,
+    signature: crypto.sign(null, Buffer.from(pc.canonicalManifestPayload(manifest)), keys.privateKey).toString('base64'),
+  }) });
+  reset(mock.port);
+  try {
+    const r = await pc.refresh({ force: true });
+    assert.equal(r.status, 'updated');
+    assert.deepEqual(r.config, BUNDLE);
+  } finally { await mock.close(); }
 });
 
 test('this plugin satisfies the live gateway minBootstrapVersion', () => {
